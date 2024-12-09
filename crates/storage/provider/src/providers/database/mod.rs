@@ -90,7 +90,7 @@ impl<N: NodeTypesWithDB> ProviderFactory<N> {
     pub fn new(
         db: N::DB,
         chain_spec: Arc<N::ChainSpec>,
-        static_file_provider: StaticFileProvider<N::Primitives>,
+        static_file_provider: (),
     ) -> Self {
         Self {
             db,

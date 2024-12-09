@@ -6,6 +6,7 @@ edition.workspace = true
 license.workspace = true
 
 [dependencies]
+# Using workspace dependencies from the root Cargo.toml
 reth.workspace = true
 reth-chainspec.workspace = true
 reth-evm-ethereum.workspace = true
@@ -13,18 +14,23 @@ reth-node-api.workspace = true
 reth-node-core.workspace = true
 reth-primitives.workspace = true
 reth-transaction-pool.workspace = true
-reth-node-ethereum = { workspace = true, features = ["test-utils"] }
+reth-node-ethereum.workspace = true
 reth-tracing.workspace = true
 reth-db.workspace = true
 reth-provider.workspace = true
 reth-node-types.workspace = true
 reth-cli.workspace = true
 reth-tasks.workspace = true
+reth-rpc.workspace = true
 
-alloy-genesis.workspace = true
+# Alloy crates (referenced in the root Cargo.toml)
 alloy-primitives.workspace = true
 alloy-consensus.workspace = true
+alloy-genesis.workspace = true
+alloy-rpc-types.workspace = true
 alloy-rpc-types-eth.workspace = true
 
-tokio.workspace = true
 eyre.workspace = true
+tokio.workspace = true
+
+jsonrpsee = { version = "0.24", features = ["macros", "server"], default-features = false }
