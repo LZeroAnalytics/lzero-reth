@@ -4838,17 +4838,26 @@ name = "lzero-custom-state"
 version = "0.0.0"
 dependencies = [
  "alloy-consensus",
+ "alloy-eips",
  "alloy-genesis",
  "alloy-primitives",
+ "alloy-serde",
  "eyre",
  "reth",
  "reth-chainspec",
+ "reth-consensus",
+ "reth-evm",
  "reth-evm-ethereum",
  "reth-node-api",
  "reth-node-core",
  "reth-node-ethereum",
  "reth-primitives",
+ "reth-primitives-traits",
+ "reth-revm",
+ "reth-storage-errors",
  "reth-tracing",
+ "revm-primitives",
+ "serde_json",
  "tokio",
 ]
 
