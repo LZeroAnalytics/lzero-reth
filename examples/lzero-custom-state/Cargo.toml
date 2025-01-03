@@ -9,23 +9,15 @@ license.workspace = true
 reth.workspace = true
 reth-chainspec.workspace = true
 reth-evm-ethereum.workspace = true
-reth-evm.workspace = true
 reth-node-api.workspace = true
 reth-node-core.workspace = true
 reth-primitives.workspace = true
-revm-primitives.workspace = true
-reth-primitives-traits.workspace = true
 reth-node-ethereum = { workspace = true, features = ["test-utils"] }
-reth-storage-errors.workspace = true
-reth-consensus.workspace = true
-reth-revm.workspace = true
 reth-tracing.workspace = true
+reth-evm.workspace = true
 alloy-genesis.workspace = true
 alloy-primitives.workspace = true
-alloy-eips.workspace = true
 alloy-consensus.workspace = true
-alloy-serde.workspace = true
-serde_json.workspace = true
 
 eyre.workspace = true
 tokio.workspace = true
