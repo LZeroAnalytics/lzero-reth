@@ -1,7 +1,11 @@
 //! This example shows how to implement a node with a custom EVM
 
 #![cfg_attr(not(test), warn(unused_crate_dependencies))]
+static ALLOC: reth_cli_util::allocator::Allocator = reth_cli_util::allocator::new_allocator();
 
+use clap::{Args, Parser};
+use reth::cli::Cli;
+use reth_ethereum_cli::chainspec::EthereumChainSpecParser;
 use alloy_consensus::Header;
 use alloy_genesis::Genesis;
 use alloy_primitives::{address, Address, Bytes, U256};
@@ -22,6 +26,13 @@ use reth::{
     tasks::TaskManager,
     transaction_pool::{PoolTransaction, TransactionPool},
 };
+use reth_node_builder::{
+    engine_tree_config::{
+        TreeConfig, DEFAULT_MEMORY_BLOCK_BUFFER_TARGET, DEFAULT_PERSISTENCE_THRESHOLD,
+    },
+    EngineNodeLauncher,
+};
+use reth_provider::providers::BlockchainProvider2;
 use reth_chainspec::{Chain, ChainSpec};
 use reth_evm::env::EvmEnv;
 use reth_evm_ethereum::EthEvmConfig;
@@ -37,6 +48,31 @@ use reth_node_ethereum::{
 use reth_primitives::{EthPrimitives, TransactionSigned};
 use reth_tracing::{RethTracer, Tracer};
 use std::{convert::Infallible, sync::Arc};
+use reth_tracing::tracing::warn;
+use tracing::info;
+
+#[derive(Debug, Clone, Args, PartialEq, Eq)]
+#[command(next_help_heading = "Engine")]
+pub struct EngineArgs {
+    /// Enable the experimental engine features on reth binary
+    ///
+    /// DEPRECATED: experimental engine is default now, use --engine.legacy to enable the legacy
+    /// functionality
+    #[arg(long = "engine.experimental", default_value = "false")]
+    pub experimental: bool,
+
+    /// Enable the legacy engine on reth binary
+    #[arg(long = "engine.legacy", default_value = "false")]
+    pub legacy: bool,
+
+    /// Configure persistence threshold for engine experimental.
+    #[arg(long = "engine.persistence-threshold", conflicts_with = "legacy", default_value_t = DEFAULT_PERSISTENCE_THRESHOLD)]
+    pub persistence_threshold: u64,
+
+    /// Configure the target number of blocks to keep in memory.
+    #[arg(long = "engine.memory-block-buffer-target", conflicts_with = "legacy", default_value_t = DEFAULT_MEMORY_BLOCK_BUFFER_TARGET)]
+    pub memory_block_buffer_target: u64,
+}
 
 /// Custom EVM configuration
 #[derive(Debug, Clone)]
@@ -187,8 +223,8 @@ where
     Types: NodeTypesWithEngine<ChainSpec = ChainSpec, Primitives = EthPrimitives>,
     Node: FullNodeTypes<Types = Types>,
     Pool: TransactionPool<Transaction: PoolTransaction<Consensus = TransactionSigned>>
-        + Unpin
-        + 'static,
+    + Unpin
+    + 'static,
     Types::Engine: PayloadTypes<
         BuiltPayload = EthBuiltPayload,
         PayloadAttributes = PayloadAttributes,
@@ -203,41 +239,63 @@ where
         self.inner.spawn(MyEvmConfig::new(ctx.chain_spec()), ctx, pool)
     }
 }
-#[tokio::main]
-async fn main() -> eyre::Result<()> {
-    let _guard = RethTracer::new().init()?;
 
-    let tasks = TaskManager::current();
+fn main() {
+    // Standard Reth CLI setup
+    reth_cli_util::sigsegv_handler::install();
+    if std::env::var_os("RUST_BACKTRACE").is_none() {
+        std::env::set_var("RUST_BACKTRACE", "1");
+    }
 
-    // create a custom chain spec
-    let spec = ChainSpec::builder()
-        .chain(Chain::mainnet())
-        .genesis(Genesis::default())
-        .london_activated()
-        .paris_activated()
-        .shanghai_activated()
-        .cancun_activated()
-        .build();
+    // The "standard" Reth CLI entry point that captures *all* normal flags
+    if let Err(err) = Cli::<EthereumChainSpecParser, EngineArgs>::parse().run(|builder, engine_args| async move {
+        if engine_args.experimental {
+            warn!(target: "reth::cli", "Experimental engine is default now, and the --engine.experimental flag is deprecated. To enable the legacy functionality, use --engine.legacy.");
+        }
 
-    let node_config =
-        NodeConfig::test().with_rpc(RpcServerArgs::default().with_http()).with_chain(spec);
+        // Choose whether to use legacy or the new engine
+        let use_legacy_engine = engine_args.legacy;
+        match use_legacy_engine {
+            false => {
+                // Build the standard `engine_tree_config` from CLI flags
+                let engine_tree_config = TreeConfig::default()
+                    .with_persistence_threshold(engine_args.persistence_threshold)
+                    .with_memory_block_buffer_target(engine_args.memory_block_buffer_target);
 
-    let handle = NodeBuilder::new(node_config)
-        .testing_node(tasks.executor())
-        // configure the node with regular ethereum types
-        .with_types::<EthereumNode>()
-        // use default ethereum components but with our executor
-        .with_components(
-            EthereumNode::components()
-                .executor(MyExecutorBuilder::default())
-                .payload(MyPayloadBuilder::default()),
-        )
-        .with_add_ons(EthereumAddOns::default())
-        .launch()
-        .await
-        .unwrap();
+                // **Here** is where you inject your custom executor/payload builder
+                let handle = builder
+                    .with_types_and_provider::<EthereumNode, BlockchainProvider2<_>>()
+                    .with_components(
+                        // Start with the default EthereumNode components
+                        EthereumNode::components()
+                            // Now inject your custom executor:
+                            .executor(MyExecutorBuilder::default())
+                            // and your custom payload builder:
+                            .payload(MyPayloadBuilder::default())
+                    )
+                    // Everything else is still the standard Reth approach
+                    .with_add_ons(EthereumAddOns::default())
+                    .launch_with_fn(|builder| {
+                        let launcher = EngineNodeLauncher::new(
+                            builder.task_executor().clone(),
+                            builder.config().datadir(),
+                            engine_tree_config,
+                        );
+                        builder.launch_with(launcher)
+                    })
+                    .await?;
 
-    println!("Node started");
-
-    handle.node_exit_future.await
+                handle.node_exit_future.await
+            }
+            true => {
+                // Legacy engine path if user sets --engine.legacy
+                info!(target: "reth::cli", "Running with legacy engine");
+                let handle = builder.launch_node(EthereumNode::default()).await?;
+                handle.node_exit_future.await
+            }
+        }
+    }) {
+        eprintln!("Error: {err:?}");
+        std::process::exit(1);
+    }
 }

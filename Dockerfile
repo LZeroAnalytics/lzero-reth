@@ -7,7 +7,6 @@ LABEL org.opencontainers.image.licenses="MIT OR Apache-2.0"
 # Install system dependencies
 RUN apt-get update && apt-get -y upgrade && apt-get install -y libclang-dev pkg-config
 
-# Builds a cargo-chef plan
 FROM chef AS planner
 COPY . .
 RUN cargo chef prepare --recipe-path recipe.json
@@ -30,23 +29,25 @@ ENV FEATURES=$FEATURES
 # Builds dependencies
 RUN cargo chef cook --profile $BUILD_PROFILE --features "$FEATURES" --recipe-path recipe.json
 
-# Build application
+# Build the package for example-custom-evm
 COPY . .
-RUN cargo build --profile $BUILD_PROFILE --features "$FEATURES" --locked --bin reth
+RUN cargo build --profile $BUILD_PROFILE -p example-custom-evm
 
-# ARG is not resolved in COPY so we have to hack around it by copying the
-# binary to a temporary location
-RUN cp /app/target/$BUILD_PROFILE/reth /app/reth
+# Copy the built binary to a temporary location
+RUN cp /app/target/$BUILD_PROFILE/example-custom-evm /app/example-custom-evm
 
 # Use Ubuntu as the release image
 FROM ubuntu AS runtime
 WORKDIR /app
 
-# Copy reth over from the build stage
-COPY --from=builder /app/reth /usr/local/bin
+# Copy the built binary
+COPY --from=builder /app/example-custom-evm /usr/local/bin
 
 # Copy licenses
 COPY LICENSE-* ./
 
+# Expose the necessary ports
 EXPOSE 30303 30303/udp 9001 8545 8546
-ENTRYPOINT ["/usr/local/bin/reth"]
+
+# Set the entrypoint to the built binary
+ENTRYPOINT ["/usr/local/bin/example-custom-evm"]
