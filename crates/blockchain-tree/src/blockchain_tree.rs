@@ -397,7 +397,6 @@ where
             .header_td(&block.parent_hash)?
             .ok_or_else(|| BlockchainTreeError::CanonicalChain { block_hash: block.parent_hash })?;
 
-        // Pass the parent total difficulty to short-circuit unnecessary calculations.
         if !self
             .externals
             .provider_factory
@@ -1037,6 +1036,7 @@ where
                         })
                     },
                 )?;
+
             if !self
                 .externals
                 .provider_factory
@@ -1399,7 +1399,6 @@ mod tests {
         },
         ProviderFactory, StorageLocation,
     };
-    use reth_revm::primitives::AccountInfo;
     use reth_stages_api::StageCheckpoint;
     use reth_trie::{root::state_root_unhashed, StateRoot};
     use std::collections::HashMap;
@@ -1624,28 +1623,26 @@ mod tests {
                 receipts_root,
                 state_root: state_root_unhashed(HashMap::from([(
                     signer,
-                    (
-                        AccountInfo {
-                            balance: initial_signer_balance -
-                                (single_tx_cost * U256::from(num_of_signer_txs)),
-                            nonce: num_of_signer_txs,
-                            ..Default::default()
-                        },
-                        EMPTY_ROOT_HASH,
-                    ),
+                    Account {
+                        balance: initial_signer_balance -
+                            (single_tx_cost * U256::from(num_of_signer_txs)),
+                        nonce: num_of_signer_txs,
+                        ..Default::default()
+                    }
+                    .into_trie_account(EMPTY_ROOT_HASH),
                 )])),
                 ..Default::default()
             };
 
             SealedBlockWithSenders::new(
-                SealedBlock {
-                    header: SealedHeader::seal(header),
-                    body: BlockBody {
+                SealedBlock::new(
+                    SealedHeader::seal(header),
+                    BlockBody {
                         transactions: signed_body,
                         ommers: Vec::new(),
                         withdrawals: Some(Withdrawals::default()),
                     },
-                },
+                ),
                 body.iter().map(|tx| tx.signer()).collect(),
             )
             .unwrap()
