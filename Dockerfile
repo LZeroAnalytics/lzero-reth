@@ -29,19 +29,19 @@ ENV FEATURES=$FEATURES
 # Builds dependencies
 RUN cargo chef cook --profile $BUILD_PROFILE --features "$FEATURES" --recipe-path recipe.json
 
-# Build the package for example-custom-evm
+# Build the package for lzero-custom-reth
 COPY . .
-RUN cargo build --profile $BUILD_PROFILE -p example-custom-evm
+RUN cargo build --profile $BUILD_PROFILE -p lzero-custom-reth
 
 # Copy the built binary to a temporary location
-RUN cp /app/target/$BUILD_PROFILE/example-custom-evm /app/example-custom-evm
+RUN cp /app/target/$BUILD_PROFILE/lzero-custom-reth /app/lzero-custom-reth
 
 # Use Ubuntu as the release image
 FROM ubuntu AS runtime
 WORKDIR /app
 
 # Copy the built binary
-COPY --from=builder /app/example-custom-evm /usr/local/bin
+COPY --from=builder /app/lzero-custom-reth /usr/local/bin
 
 # Copy licenses
 COPY LICENSE-* ./
@@ -50,4 +50,4 @@ COPY LICENSE-* ./
 EXPOSE 30303 30303/udp 9001 8545 8546
 
 # Set the entrypoint to the built binary
-ENTRYPOINT ["/usr/local/bin/example-custom-evm"]
+ENTRYPOINT ["/usr/local/bin/lzero-custom-reth"]
