@@ -11,7 +11,7 @@
 #![cfg_attr(not(test), warn(unused_crate_dependencies))]
 
 use alloy_eips::BlockNumberOrTag;
-use alloy_primitives::Address;
+use alloy_primitives::{Address, U256};
 use alloy_rpc_types_eth::state::EvmOverrides;
 use clap::Parser;
 use futures_util::StreamExt;
@@ -24,9 +24,10 @@ use reth::{
         interpreter::{Interpreter, OpCode},
         Database, Evm, EvmContext, Inspector,
     },
-    rpc::{api::eth::helpers::Call, compat::transaction::transaction_to_call_request},
-    transaction_pool::TransactionPool,
+    rpc::{api::eth::helpers::Call, api::eth::helpers::LoadState, compat::transaction::transaction_to_call_request},
+    transaction_pool::TransactionPool, transaction_pool::PoolTransaction
 };
+use reth::rpc::types::TransactionTrait;
 use reth_node_ethereum::node::EthereumNode;
 
 fn main() {
@@ -51,43 +52,78 @@ fn main() {
                     let tx = event.transaction;
                     println!("Transaction received: {tx:?}");
 
+                    let tx_inner = &tx.transaction;
+
+                    if tx.to().is_none() {
+                        println!("Transaction is a contract creation: {tx:?}");
+                        continue;
+                    }
+
                     if let Some(recipient) = tx.to() {
                         if args.is_match(&recipient) {
-                            // convert the pool transaction
-                            let call_request = transaction_to_call_request(tx.to_consensus());
-
-                            let result = eth_api
-                                .spawn_with_call_at(
-                                    call_request,
-                                    BlockNumberOrTag::Latest.into(),
-                                    EvmOverrides::default(),
-                                    move |db, env| {
-                                        let mut dummy_inspector = DummyInspector::default();
-                                        {
-                                            // configure the evm with the custom inspector
-                                            let mut evm = Evm::builder()
-                                                .with_db(db)
-                                                .with_external_context(&mut dummy_inspector)
-                                                .with_env_with_handler_cfg(env)
-                                                .append_handler_register(inspector_handle_register)
-                                                .build();
-                                            // execute the transaction on a blocking task and await
-                                            // the
-                                            // inspector result
-                                            let _ = evm.transact()?;
-                                        }
-                                        Ok(dummy_inspector)
-                                    },
-                                )
-                                .await;
-
-                            if let Ok(ret_val) = result {
-                                let hash = tx.hash();
+                            if tx_inner.input().is_empty() {
                                 println!(
-                                    "Inspector result for transaction {}: \n {}",
-                                    hash,
-                                    ret_val.ret_val.join("\n")
+                                    "Transaction to address {recipient:?} is a normal ETH transfer"
                                 );
+                            } else {
+                                let recipient_address = Address::from(*recipient);
+                                // Fetch the bytecode of the recipient address
+                                let bytecode = eth_api
+                                    .get_code(recipient_address,  Some(alloy_eips::BlockId::Number(BlockNumberOrTag::Latest)))
+                                    .await;
+
+                                match bytecode {
+                                    Ok(code) if code.is_empty() => {
+                                        println!(
+                                            "Transaction to address {recipient:?} has no bytecode (call to non-existent contract)"
+                                        );
+                                    }
+                                    Ok(_) => {
+                                        println!(
+                                            "Transaction to address {recipient:?} is a smart contract call with bytecode"
+                                        );
+                                    }
+                                    Err(e) => {
+                                        println!(
+                                            "Failed to fetch bytecode for address {recipient:?}: {e:?}"
+                                        );
+                                    }
+                                }
+
+                                // Convert the pool transaction to a call request
+                                let call_request = transaction_to_call_request(tx.to_consensus());
+
+                                let result = eth_api
+                                    .spawn_with_call_at(
+                                        call_request,
+                                        BlockNumberOrTag::Latest.into(),
+                                        EvmOverrides::default(),
+                                        move |db, env| {
+                                            let mut dummy_inspector = DummyInspector::default();
+                                            {
+                                                // Configure the EVM with the custom inspector
+                                                let mut evm = Evm::builder()
+                                                    .with_db(db)
+                                                    .with_external_context(&mut dummy_inspector)
+                                                    .with_env_with_handler_cfg(env)
+                                                    .append_handler_register(inspector_handle_register)
+                                                    .build();
+                                                // Execute the transaction on a blocking task and await the inspector result
+                                                let _ = evm.transact()?;
+                                            }
+                                            Ok(dummy_inspector)
+                                        },
+                                    )
+                                    .await;
+
+                                if let Ok(ret_val) = result {
+                                    let hash = tx.hash();
+                                    println!(
+                                        "Inspector result for transaction {}: \n {}",
+                                        hash,
+                                        ret_val.ret_val.join("\n")
+                                    );
+                                }
                             }
                         }
                     }
