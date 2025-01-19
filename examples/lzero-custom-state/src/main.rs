@@ -1,11 +1,16 @@
-use alloy_consensus::Transaction as _;
+use alloy_consensus::{Header, Transaction as _};
 use alloy_eips::{eip6110, eip7685::Requests};
 use alloy_primitives::U256;
+use alloy_primitives::Bytes;
 use clap::Parser;
 use reth::{
     api::{FullNodeTypes, NodePrimitives, NodeTypesWithEngine},
     builder::{
-        components::ExecutorBuilder,
+        components::{
+            ExecutorBuilder,
+            PayloadServiceBuilder,
+        },
+        PayloadBuilderConfig,
         rpc::EngineValidatorBuilder,
         BuilderContext,
         NodeHandle,
@@ -14,7 +19,8 @@ use reth::{
     cli::Cli,
     consensus::ConsensusError,
     core::primitives::SignedTransaction,
-    providers::ProviderError,
+    payload::{PayloadBuilderHandle, PayloadBuilderService, EthBuiltPayload, EthPayloadBuilderAttributes},
+    providers::{ProviderError, CanonStateSubscriptions},
     revm::{
         interpreter::primitives::AccountInfo,
         primitives::{hex, Bytecode, EnvWithHandlerCfg, ResultAndState},
@@ -23,6 +29,8 @@ use reth::{
     rpc::{api::eth::helpers::Call, types::TransactionTrait},
     transaction_pool::{PoolTransaction, TransactionPool},
 };
+use reth_basic_payload_builder::{PayloadBuilder, BuildArguments, BuildOutcome, PayloadConfig, BasicPayloadJobGenerator};
+use reth_ethereum_payload_builder::{EthereumBuilderConfig, EthereumPayloadBuilder};
 use reth_evm::{
     env::EvmEnv,
     execute::{
@@ -38,11 +46,20 @@ use reth_evm_ethereum::{
     eip6110::parse_deposits_from_receipts,
     EthEvmConfig,
 };
-use reth_node_ethereum::{
-    node::EthereumAddOns, BasicBlockExecutorProvider, EthereumNode,
+use reth_node_ethereum::{node::EthereumAddOns, BasicBlockExecutorProvider, EthEngineTypes, EthereumNode};
+use reth_primitives::{BlockWithSenders, EthPrimitives, Receipt, TransactionSigned};
+use std::{
+    fmt::Display,
+    hash::Hash,
+    sync::Arc,
 };
-use reth_primitives::{BlockWithSenders, EthPrimitives, Receipt};
-use std::{fmt::Display, hash::Hash, sync::Arc};
+use reth::revm::primitives::{BlockEnv, CfgEnvWithHandlerCfg};
+use reth::version::default_extra_data_bytes;
+use reth_payload_builder::{PayloadBuilderError};
+use reth_basic_payload_builder::{BasicPayloadJobGeneratorConfig};
+use reth_chainspec::ChainSpecProvider;
+use reth_revm::database::StateProviderDatabase;
+use reth_storage_api::StateProviderFactory;
 
 fn main() {
     Cli::<EthereumChainSpecParser>::parse()
@@ -52,6 +69,7 @@ fn main() {
                 .with_components(
                     EthereumNode::components()
                         .executor(CustomExecutorBuilder::default())
+                        .payload(CustomPayloadServiceBuilder::default())
                 )
                 .with_add_ons(EthereumAddOns::default())
                 .launch()
@@ -388,3 +406,103 @@ where
 //
 // Custom Payload
 //
+#[derive(Debug, Default, Clone)]
+#[non_exhaustive]
+pub struct CustomPayloadServiceBuilder;
+
+impl<Node, Pool> PayloadServiceBuilder<Node, Pool> for CustomPayloadServiceBuilder
+where
+    Node: FullNodeTypes<
+        Types: NodeTypesWithEngine<
+            Engine = EthEngineTypes,
+            ChainSpec = ChainSpec,
+            Primitives = EthPrimitives,
+        >,
+    >,
+    Pool: TransactionPool<Transaction: PoolTransaction<Consensus = TransactionSigned>>
+    + Unpin
+    + 'static,
+{
+    async fn spawn_payload_service(
+        self,
+        ctx: &BuilderContext<Node>,
+        pool: Pool,
+    ) -> eyre::Result<PayloadBuilderHandle<<Node::Types as NodeTypesWithEngine>::Engine>> {
+        let payload_builder = CustomPayloadBuilder::default();
+        let conf = ctx.payload_builder_config();
+
+        let payload_job_config = BasicPayloadJobGeneratorConfig::default()
+            .interval(conf.interval())
+            .deadline(conf.deadline())
+            .max_payload_tasks(conf.max_payload_tasks());
+
+        let payload_generator = BasicPayloadJobGenerator::with_builder(
+            ctx.provider().clone(),
+            pool,
+            ctx.task_executor().clone(),
+            payload_job_config,
+            payload_builder,
+        );
+        let (payload_service, payload_builder) =
+            PayloadBuilderService::new(payload_generator, ctx.provider().canonical_state_stream());
+
+        ctx.task_executor().spawn_critical("payload builder service", Box::pin(payload_service));
+
+        Ok(payload_builder)
+    }
+}
+
+#[derive(Debug, Default, Clone)]
+#[non_exhaustive]
+pub struct CustomPayloadBuilder;
+
+impl<Pool, Client> PayloadBuilder<Pool, Client> for CustomPayloadBuilder
+where
+    Client: StateProviderFactory + ChainSpecProvider<ChainSpec = ChainSpec>,
+    Pool: TransactionPool<Transaction: PoolTransaction<Consensus = TransactionSigned>>,
+{
+    type Attributes = EthPayloadBuilderAttributes;
+    type BuiltPayload = EthBuiltPayload;
+
+    fn try_build(
+        &self,
+        args: BuildArguments<Pool, Client, Self::Attributes, Self::BuiltPayload>,
+    ) -> Result<BuildOutcome<Self::BuiltPayload>, PayloadBuilderError> {
+        let BuildArguments { client, pool, cached_reads, config, cancel, best_payload } = args;
+        let PayloadConfig { parent_header, attributes } = config;
+
+        let chain_spec = client.chain_spec();
+
+        // This reuses the default EthereumPayloadBuilder to build the payload
+        // but any custom logic can be implemented here
+        reth_ethereum_payload_builder::EthereumPayloadBuilder::new(
+            EthEvmConfig::new(chain_spec.clone()),
+            EthereumBuilderConfig::new(default_extra_data_bytes()),
+        )
+            .try_build(BuildArguments {
+                client,
+                pool,
+                cached_reads,
+                config: PayloadConfig { parent_header, attributes },
+                cancel,
+                best_payload,
+            })
+    }
+
+    fn build_empty_payload(
+        &self,
+        client: &Client,
+        config: PayloadConfig<Self::Attributes>,
+    ) -> Result<Self::BuiltPayload, PayloadBuilderError> {
+        let PayloadConfig { parent_header, attributes } = config;
+        let chain_spec = client.chain_spec();
+        <reth_ethereum_payload_builder::EthereumPayloadBuilder as PayloadBuilder<Pool, Client>>::build_empty_payload(
+            &reth_ethereum_payload_builder::EthereumPayloadBuilder::new(
+                EthEvmConfig::new(chain_spec.clone()),
+                EthereumBuilderConfig::new(default_extra_data_bytes())
+            ),
+            client,
+            PayloadConfig { parent_header, attributes }
+        )
+    }
+}

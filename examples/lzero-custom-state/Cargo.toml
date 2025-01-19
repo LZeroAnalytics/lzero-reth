@@ -22,6 +22,9 @@ eyre.workspace = true
 alloy-consensus.workspace = true
 reth-trie.workspace = true
 reth-storage-api.workspace = true
+reth-ethereum-payload-builder.workspace = true
+reth-basic-payload-builder.workspace = true
+reth-payload-builder.workspace = true
 
 [features]
 default = ["std"]
