@@ -3,6 +3,7 @@ name = "lzero-custom-reth"
 version = "0.0.0"
 publish = false
 edition.workspace = true
+rust-version.workspace = true
 license.workspace = true
 
 [dependencies]
@@ -12,27 +13,17 @@ reth-evm.workspace = true
 reth-revm.workspace = true
 reth-evm-ethereum.workspace =  true
 reth-chainspec.workspace = true
-alloy-rpc-types-eth.workspace = true
 clap = { workspace = true, features = ["derive"] }
-futures-util.workspace = true
 alloy-primitives.workspace = true
 reth-primitives.workspace = true
 alloy-eips.workspace = true
 eyre.workspace = true
 alloy-consensus.workspace = true
-reth-trie.workspace = true
 reth-storage-api.workspace = true
 reth-ethereum-payload-builder.workspace = true
 reth-basic-payload-builder.workspace = true
 reth-payload-builder.workspace = true
-
-[features]
-default = ["std"]
-std = [
-    "reth-primitives/std",
-    "reth-revm/std",
-    "alloy-consensus/std",
-    "alloy-eips/std",
-    "alloy-primitives/std",
-    "reth-chainspec/std"
-]
+tracing.workspace = true
+reth-chain-state.workspace = true
+reth-execution-types.workspace = true
+reth-errors.workspace = true
