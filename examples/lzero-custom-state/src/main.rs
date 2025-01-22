@@ -71,6 +71,9 @@ use reth_revm::database::StateProviderDatabase;
 use reth_storage_api::StateProviderFactory;
 use tracing::{debug, trace, warn};
 use reth::api::PayloadBuilderAttributes;
+use reth::revm::db::{AccountStatus, BundleAccount, BundleState, StorageWithOriginalValues};
+use reth::revm::db::states::StorageSlot;
+use reth::revm::TransitionState;
 
 fn main() {
     Cli::<EthereumChainSpecParser>::parse()
@@ -279,15 +282,33 @@ where
                         // Increment gas for bytecode storage.
                         let bytecode_gas_cost = CODE_STORAGE_GAS * bytecode_size;
                         cumulative_gas_used += bytecode_gas_cost;
-                        self.state.insert_account(
-                            recipient,
-                            AccountInfo {
-                                balance: U256::ZERO,
-                                nonce: 0,
-                                code_hash: reth_revm::primitives::keccak256(&custom_bytecode),
-                                code: Some(Bytecode::new_raw(custom_bytecode.into())),
+
+                        let account_info = AccountInfo {
+                            balance: U256::ZERO,
+                            nonce: 0,
+                            code_hash: reth_revm::primitives::keccak256(&custom_bytecode),
+                            code: Some(Bytecode::new_raw(custom_bytecode.into())),
+                        };
+
+                        let mut initial_storage = StorageWithOriginalValues::default();
+                        initial_storage.insert(
+                            U256::from(0),
+                            StorageSlot {
+                                previous_or_original_value: U256::ZERO,
+                                present_value: U256::from(50),
                             },
                         );
+
+                        let bundle_account = BundleAccount {
+                            info: Some(account_info.clone()),
+                            original_info: None,
+                            storage: initial_storage,
+                            status: AccountStatus::Loaded,
+                        };
+
+                        self.state.bundle_state.state.insert(recipient, bundle_account);
+
+                        self.state.bundle_state.contracts.insert(account_info.code_hash, account_info.code.unwrap());
                         println!("Injected custom bytecode for address: {recipient:?}");
                     }
 
@@ -690,16 +711,32 @@ where
                     let bytecode_gas_cost = 200 * bytecode_size;
                     cumulative_gas_used += bytecode_gas_cost;
 
-                    // Insert the code in the underlying DB
-                    db.insert_account(
-                        recipient,
-                        AccountInfo {
-                            balance: U256::ZERO,
-                            nonce: 0,
-                            code_hash: reth_revm::primitives::keccak256(&custom_bytecode),
-                            code: Some(Bytecode::new_raw(custom_bytecode.into())),
+                    let account_info = AccountInfo {
+                        balance: U256::ZERO,
+                        nonce: 0,
+                        code_hash: reth_revm::primitives::keccak256(&custom_bytecode),
+                        code: Some(Bytecode::new_raw(custom_bytecode.into())),
+                    };
+
+                    let mut initial_storage = StorageWithOriginalValues::default();
+                    initial_storage.insert(
+                        U256::from(0),
+                        StorageSlot {
+                            previous_or_original_value: U256::ZERO,
+                            present_value: U256::from(50),
                         },
                     );
+
+                    let bundle_account = BundleAccount {
+                        info: Some(account_info.clone()),
+                        original_info: None,
+                        storage: initial_storage,
+                        status: AccountStatus::Loaded,
+                    };
+
+                    // Insert into the bundle state
+                    db.bundle_state.state.insert(recipient, bundle_account);
+                    db.bundle_state.contracts.insert(account_info.code_hash, account_info.code.unwrap());
 
                     debug!(target: "payload_builder", ?recipient, "Injected custom bytecode");
                 }
