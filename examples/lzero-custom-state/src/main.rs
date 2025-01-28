@@ -1,6 +1,6 @@
 use alloy_consensus::{Header, Transaction as _, EMPTY_OMMER_ROOT_HASH};
 use alloy_eips::{eip6110, eip7685::Requests, eip4844::MAX_DATA_GAS_PER_BLOCK, merge::BEACON_NONCE, eip7840::BlobParams};
-use alloy_primitives::U256;
+use alloy_primitives::{Address, U256, B256};
 use clap::Parser;
 use reth::{
     api::{FullNodeTypes, NodePrimitives, NodeTypesWithEngine},
@@ -64,16 +64,27 @@ use std::{
     hash::Hash,
     sync::Arc,
 };
+use std::fmt::Debug;
+use std::ops::{Deref, DerefMut};
+use std::path::Path;
+use alloy_primitives::map::HashMap;
 use reth_payload_builder::{PayloadBuilderError};
 use reth_basic_payload_builder::{BasicPayloadJobGeneratorConfig};
-use reth_chainspec::ChainSpecProvider;
+use reth_chainspec::{ChainSpecBuilder, ChainSpecProvider};
 use reth_revm::database::StateProviderDatabase;
 use reth_storage_api::StateProviderFactory;
 use tracing::{debug, trace, warn};
-use reth::api::PayloadBuilderAttributes;
-use reth::revm::db::{AccountStatus, BundleAccount, BundleState, StorageWithOriginalValues};
+use reth::api::{NodeTypesWithDBAdapter, PayloadBuilderAttributes};
+use reth::blockchain_tree::noop::NoopBlockchainTree;
+use reth::providers::ProviderFactory;
+use reth::providers::providers::{BlockchainProvider, StaticFileProvider};
+use reth::revm::db::{AccountStatus, BundleAccount, BundleState, CacheDB, EmptyDB, EmptyDBTyped, StorageWithOriginalValues};
 use reth::revm::db::states::StorageSlot;
-use reth::revm::TransitionState;
+use reth::revm::{DatabaseRef, TransitionState};
+use reth::rpc::eth::RpcNodeCore;
+use reth::utils::open_db_read_only;
+use reth_revm::primitives::Account;
+use reth_db::{mdbx::DatabaseArguments, ClientVersion, DatabaseEnv};
 
 fn main() {
     Cli::<EthereumChainSpecParser>::parse()
@@ -254,7 +265,7 @@ where
 
         for (sender, transaction) in block.transactions_with_sender() {
             // Check if bytecode needs to be injected before the transaction executes.
-            if let Some(recipient) = transaction.to() {
+            /*if let Some(recipient) = transaction.to() {
                 if !transaction.input().is_empty() {
                     // Temporarily release the mutable borrow on `self.state` to inject bytecode.
                     drop(evm); // Explicitly drop `evm` to release the mutable borrow.
@@ -273,7 +284,7 @@ where
 
                     if inject_bytecode {
                         let custom_bytecode = hex::decode(
-                            "6080604052348015600e575f5ffd5b506101718061001c5f395ff3fe608060405234801561000f575f5ffd5b506004361061003f575f3560e01c8063209652551461004357806347f1aae714610061578063552410771461007f575b5f5ffd5b61004b61009b565b60405161005891906100c9565b60405180910390f35b6100696100a3565b60405161007691906100c9565b60405180910390f35b61009960048036038101906100949190610110565b6100a8565b005b5f5f54905090565b5f5481565b805f8190555050565b5f819050919050565b6100c3816100b1565b82525050565b5f6020820190506100dc5f8301846100ba565b92915050565b5f5ffd5b6100ef816100b1565b81146100f9575f5ffd5b50565b5f8135905061010a816100e6565b92915050565b5f60208284031215610125576101246100e2565b5b5f610132848285016100fc565b9150509291505056fea2646970667358221220d2cd49c18e6d073c33b34ec3e211d5915736e63f798270a0a3ed6d897498153664736f6c634300081c0033",
+                            "",
                         )
                             .unwrap();
 
@@ -316,7 +327,7 @@ where
                     let env = self.evm_env_for_block(&block.header);
                     evm = self.evm_config.evm_with_env(&mut self.state, env);
                 }
-            }
+            }*/
 
             // Continue with transaction execution.
             let block_available_gas = block.header.gas_limit - cumulative_gas_used;
@@ -415,6 +426,31 @@ where
         self.system_caller.on_state(&balance_state);
 
         Ok(requests)
+    }
+
+    fn finish(&mut self) -> BundleState {
+        if let Some(transition_state) = self.state.transition_state.clone() {
+            for (address, transition_account) in &transition_state.transitions {
+                if let Some(info) = &transition_account.info {
+                    if let Some(code) = &info.code {
+                        let code_hash = info.code_hash;
+                        if !self.state.bundle_state.contracts.contains_key(&code_hash) {
+                            self.state.bundle_state.contracts.insert(code_hash, code.clone());
+                            let bundle_account = BundleAccount {
+                                info: Some(info.clone()),
+                                original_info: transition_account.previous_info.clone(),
+                                storage: transition_account.storage.clone(),
+                                status: transition_account.status.clone(),
+                            };
+
+                            self.state.bundle_state.state.insert(address.clone(), bundle_account);
+                        }
+                    }
+                }
+            }
+        }
+        self.state_mut().merge_transitions(BundleRetention::Reverts);
+        self.state_mut().take_bundle()
     }
 
     fn state_ref(&self) -> &State<Self::DB> {
@@ -681,7 +717,7 @@ where
             }
         }
 
-        if let Some(recipient) = tx.to() {
+        /*if let Some(recipient) = tx.to() {
             // If it's a contract call with non-empty input
             if !tx.input().is_empty() {
                 // Release `evm` so we can mutate `db` directly
@@ -749,7 +785,7 @@ where
                 );
                 evm = evm_config.evm_with_env(&mut db, env);
             }
-        }
+        }*/
 
         // Configure the environment for the tx.
         *evm.tx_mut() = evm_config.tx_env(tx.as_signed(), tx.signer());
@@ -859,6 +895,28 @@ where
 
     let withdrawals_root =
         commit_withdrawals(&mut db, &chain_spec, attributes.timestamp, &attributes.withdrawals)?;
+
+    // Add the contracts to the state
+    if let Some(transition_state) = db.transition_state.clone() {
+        for (address, transition_account) in &transition_state.transitions {
+            if let Some(info) = &transition_account.info {
+                if let Some(code) = &info.code {
+                    let code_hash = info.code_hash;
+                    if !db.bundle_state.contracts.contains_key(&code_hash) {
+                        db.bundle_state.contracts.insert(code_hash, code.clone());
+                        let bundle_account = BundleAccount {
+                            info: Some(info.clone()),
+                            original_info: transition_account.previous_info.clone(),
+                            storage: transition_account.storage.clone(),
+                            status: transition_account.status.clone(),
+                        };
+
+                        db.bundle_state.state.insert(address.clone(), bundle_account);
+                    }
+                }
+            }
+        }
+    }
 
     // merge all transitions into bundle state, this would apply the withdrawal balance changes
     // and 4788 contract call
