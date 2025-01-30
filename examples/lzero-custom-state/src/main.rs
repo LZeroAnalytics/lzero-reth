@@ -85,6 +85,7 @@ use reth::rpc::eth::RpcNodeCore;
 use reth::utils::open_db_read_only;
 use reth_revm::primitives::Account;
 use reth_db::{mdbx::DatabaseArguments, ClientVersion, DatabaseEnv};
+use reth_evm_ethereum::execute::EthExecutionStrategy;
 
 fn main() {
     Cli::<EthereumChainSpecParser>::parse()
@@ -264,70 +265,6 @@ where
         let mut receipts = Vec::with_capacity(block.body.transactions.len());
 
         for (sender, transaction) in block.transactions_with_sender() {
-            // Check if bytecode needs to be injected before the transaction executes.
-            /*if let Some(recipient) = transaction.to() {
-                if !transaction.input().is_empty() {
-                    // Temporarily release the mutable borrow on `self.state` to inject bytecode.
-                    drop(evm); // Explicitly drop `evm` to release the mutable borrow.
-
-                    let inject_bytecode = {
-                        if let Some(account) = self.state.database.basic(recipient).unwrap_or_default() {
-                            account.code.is_none()
-                                || account
-                                .code
-                                .as_ref()
-                                .map_or(true, |code| code.is_empty())
-                        } else {
-                            true
-                        }
-                    };
-
-                    if inject_bytecode {
-                        let custom_bytecode = hex::decode(
-                            "",
-                        )
-                            .unwrap();
-
-                        let bytecode_size = custom_bytecode.len() as u64;
-
-                        // Increment gas for bytecode storage.
-                        let bytecode_gas_cost = CODE_STORAGE_GAS * bytecode_size;
-                        cumulative_gas_used += bytecode_gas_cost;
-
-                        let account_info = AccountInfo {
-                            balance: U256::ZERO,
-                            nonce: 0,
-                            code_hash: reth_revm::primitives::keccak256(&custom_bytecode),
-                            code: Some(Bytecode::new_raw(custom_bytecode.into())),
-                        };
-
-                        let mut initial_storage = StorageWithOriginalValues::default();
-                        initial_storage.insert(
-                            U256::from(0),
-                            StorageSlot {
-                                previous_or_original_value: U256::ZERO,
-                                present_value: U256::from(50),
-                            },
-                        );
-
-                        let bundle_account = BundleAccount {
-                            info: Some(account_info.clone()),
-                            original_info: None,
-                            storage: initial_storage,
-                            status: AccountStatus::Loaded,
-                        };
-
-                        self.state.bundle_state.state.insert(recipient, bundle_account);
-
-                        self.state.bundle_state.contracts.insert(account_info.code_hash, account_info.code.unwrap());
-                        println!("Injected custom bytecode for address: {recipient:?}");
-                    }
-
-                    // Reinitialize the EVM with the updated state after bytecode injection.
-                    let env = self.evm_env_for_block(&block.header);
-                    evm = self.evm_config.evm_with_env(&mut self.state, env);
-                }
-            }*/
 
             // Continue with transaction execution.
             let block_available_gas = block.header.gas_limit - cumulative_gas_used;
@@ -716,76 +653,6 @@ where
                 continue
             }
         }
-
-        /*if let Some(recipient) = tx.to() {
-            // If it's a contract call with non-empty input
-            if !tx.input().is_empty() {
-                // Release `evm` so we can mutate `db` directly
-                drop(evm);
-
-                // Determine if the code is missing/empty:
-                let need_code_injection = {
-                    // `db.database.basic(...)` returns an `Option<AccountInfo>`
-                    let account = db.database.basic(recipient).unwrap_or_default();
-                    account
-                        .map(|acc| {
-                            acc.code.is_none()
-                                || acc.code.as_ref().map_or(true, |code| code.is_empty())
-                        })
-                        .unwrap_or(true)
-                };
-
-                if need_code_injection {
-                    // Some dummy code as an example
-                    let custom_bytecode = hex::decode(
-                        "6080604052348015600e575f5ffd5b506101718061001c5f395ff3fe608060405234801561000f575f5ffd5b506004361061003f575f3560e01c8063209652551461004357806347f1aae714610061578063552410771461007f575b5f5ffd5b61004b61009b565b60405161005891906100c9565b60405180910390f35b6100696100a3565b60405161007691906100c9565b60405180910390f35b61009960048036038101906100949190610110565b6100a8565b005b5f5f54905090565b5f5481565b805f8190555050565b5f819050919050565b6100c3816100b1565b82525050565b5f6020820190506100dc5f8301846100ba565b92915050565b5f5ffd5b6100ef816100b1565b81146100f9575f5ffd5b50565b5f8135905061010a816100e6565b92915050565b5f60208284031215610125576101246100e2565b5b5f610132848285016100fc565b9150509291505056fea2646970667358221220d2cd49c18e6d073c33b34ec3e211d5915736e63f798270a0a3ed6d897498153664736f6c634300081c0033"
-                    )
-                        .unwrap();
-                    let bytecode_size = custom_bytecode.len() as u64;
-
-
-                    let bytecode_gas_cost = 200 * bytecode_size;
-                    cumulative_gas_used += bytecode_gas_cost;
-
-                    let account_info = AccountInfo {
-                        balance: U256::ZERO,
-                        nonce: 0,
-                        code_hash: reth_revm::primitives::keccak256(&custom_bytecode),
-                        code: Some(Bytecode::new_raw(custom_bytecode.into())),
-                    };
-
-                    let mut initial_storage = StorageWithOriginalValues::default();
-                    initial_storage.insert(
-                        U256::from(0),
-                        StorageSlot {
-                            previous_or_original_value: U256::ZERO,
-                            present_value: U256::from(50),
-                        },
-                    );
-
-                    let bundle_account = BundleAccount {
-                        info: Some(account_info.clone()),
-                        original_info: None,
-                        storage: initial_storage,
-                        status: AccountStatus::Loaded,
-                    };
-
-                    // Insert into the bundle state
-                    db.bundle_state.state.insert(recipient, bundle_account);
-                    db.bundle_state.contracts.insert(account_info.code_hash, account_info.code.unwrap());
-
-                    debug!(target: "payload_builder", ?recipient, "Injected custom bytecode");
-                }
-
-                // Re-create our EVM with the updated state
-                let env = EnvWithHandlerCfg::new_with_cfg_env(
-                    initialized_cfg.clone(),
-                    initialized_block_env.clone(),
-                    TxEnv::default(),
-                );
-                evm = evm_config.evm_with_env(&mut db, env);
-            }
-        }*/
 
         // Configure the environment for the tx.
         *evm.tx_mut() = evm_config.tx_env(tx.as_signed(), tx.signer());

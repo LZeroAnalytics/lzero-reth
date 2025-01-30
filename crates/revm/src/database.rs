@@ -2,6 +2,9 @@ use crate::primitives::alloy_primitives::{BlockNumber, StorageKey, StorageValue}
 use alloy_primitives::{Address, Bytes, B256, U256};
 use core::ops::{Deref, DerefMut};
 use core::str::FromStr;
+use std::thread::sleep;
+use std::time::{Duration};
+use rand::Rng;
 use reth_primitives::Account;
 use reth_storage_errors::provider::{ProviderError, ProviderResult};
 use revm::{
@@ -16,7 +19,12 @@ use serde::{Deserialize, Serialize};
 use once_cell::sync::Lazy;
 
 // Define your RPC endpoint
-const MAINNET_RPC_URL: &str = "https://eth-mainnet.g.alchemy.com/v2/SHQeqTrXogQwqWL8veM2EOphUVoNw3mN";
+fn get_rpc_url() -> String {
+    std::env::var("RPC_URL").unwrap_or_else(|_| {
+        panic!("RPC_URL is not set. Please provide the RPC URL as an environment variable.");
+    })
+}
+
 static GLOBAL_CLIENT: Lazy<Client> = Lazy::new(|| {
     Client::builder()
         .timeout(std::time::Duration::from_secs(10))
@@ -122,31 +130,120 @@ impl<DB> StateProviderDatabase<DB> {
         method: &str,
         params: serde_json::Value,
     ) -> Result<T, String> {
+        // Retry configuration
+        const MAX_RETRIES: u32 = 5;
+        const BASE_DELAY_MS: u64 = 100;
+        const MAX_BACKOFF_MS: u64 = 1600; // Maximum backoff delay
 
-        let request = JsonRpcRequest {
-            jsonrpc: "2.0",
-            method,
-            params,
-            id: 1,
-        };
+        let mut attempt = 0;
 
-        let resp = GLOBAL_CLIENT
-            .post(MAINNET_RPC_URL)
-            .json(&request)
-            .send()
-            .map_err(|e| format!("HTTP request error: {}", e))?;
+        loop {
+            let request = JsonRpcRequest {
+                jsonrpc: "2.0",
+                method,
+                params: params.clone(), // Clone because we might retry
+                id: 1,
+            };
 
-        let rpc_response: JsonRpcResponse<T> = resp
-            .json()
-            .map_err(|e| format!("Failed to parse JSON: {}", e))?;
+            let rpc_url = get_rpc_url();
 
-        if let Some(error) = rpc_response.error {
-            return Err(format!("RPC error {}: {}", error.code, error.message));
+            // Send the HTTP request
+            let response = GLOBAL_CLIENT
+                .post(rpc_url)
+                .json(&request)
+                .send();
+
+            match response {
+                Ok(resp) => {
+                    // Attempt to parse the JSON-RPC response
+                    let rpc_response: Result<JsonRpcResponse<T>, _> = resp.json();
+
+                    match rpc_response {
+                        Ok(rpc_resp) => {
+                            if let Some(error) = rpc_resp.error {
+                                // Decide whether to retry based on error code
+                                if Self::is_transient_error(error.code) && attempt < MAX_RETRIES {
+                                    attempt += 1;
+                                    let delay = Self::calculate_backoff_delay(attempt, BASE_DELAY_MS, MAX_BACKOFF_MS);
+                                    eprintln!(
+                                        "RPC error {}: {}. Retrying in {:?} (Attempt {}/{})...",
+                                        error.code, error.message, delay, attempt, MAX_RETRIES
+                                    );
+                                    sleep(delay);
+                                    continue;
+                                } else {
+                                    // Non-retriable error or max retries reached
+                                    return Err(format!("RPC error {}: {}", error.code, error.message));
+                                }
+                            }
+
+                            // Check if the result is present
+                            match rpc_resp.result {
+                                Some(result) => return Ok(result),
+                                None => {
+                                    if attempt < MAX_RETRIES {
+                                        attempt += 1;
+                                        let delay = Self::calculate_backoff_delay(attempt, BASE_DELAY_MS, MAX_BACKOFF_MS);
+                                        eprintln!(
+                                            "No result in RPC response. Retrying in {:?} (Attempt {}/{})...",
+                                            delay, attempt, MAX_RETRIES
+                                        );
+                                        sleep(delay);
+                                        continue;
+                                    } else {
+                                        return Err("No result in RPC response".to_string());
+                                    }
+                                }
+                            }
+                        }
+                        Err(e) => {
+                            // JSON parsing error
+                            if attempt < MAX_RETRIES {
+                                attempt += 1;
+                                let delay = Self::calculate_backoff_delay(attempt, BASE_DELAY_MS, MAX_BACKOFF_MS);
+                                eprintln!(
+                                    "Failed to parse JSON response: {}. Retrying in {:?} (Attempt {}/{})...",
+                                    e, delay, attempt, MAX_RETRIES
+                                );
+                                sleep(delay);
+                                continue;
+                            } else {
+                                return Err(format!("Failed to parse JSON response: {}", e));
+                            }
+                        }
+                    }
+                }
+                Err(e) => {
+                    // Network or request error
+                    if attempt < MAX_RETRIES {
+                        attempt += 1;
+                        let delay = Self::calculate_backoff_delay(attempt, BASE_DELAY_MS, MAX_BACKOFF_MS);
+                        eprintln!(
+                            "HTTP request error: {}. Retrying in {:?} (Attempt {}/{})...",
+                            e, delay, attempt, MAX_RETRIES
+                        );
+                        sleep(delay);
+                        continue;
+                    } else {
+                        return Err(format!("HTTP request error: {}", e));
+                    }
+                }
+            }
         }
+    }
 
-        rpc_response
-            .result
-            .ok_or_else(|| "No result in RPC response".to_string())
+    /// Determines if an RPC error code is transient and worth retrying
+    fn is_transient_error(code: i64) -> bool {
+        true
+    }
+
+    /// Calculates the backoff delay with exponential growth and jitter
+    fn calculate_backoff_delay(attempt: u32, base_delay_ms: u64, max_delay_ms: u64) -> Duration {
+        let exponential_delay = base_delay_ms * 2u64.pow(attempt - 1);
+        let capped_delay = exponential_delay.min(max_delay_ms);
+        // Add jitter: random value between 0 and 100ms
+        let jitter = rand::thread_rng().gen_range(0..100);
+        Duration::from_millis(capped_delay + jitter)
     }
 }
 

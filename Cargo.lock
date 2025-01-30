@@ -8937,6 +8937,7 @@ dependencies = [
  "alloy-eips",
  "alloy-primitives",
  "once_cell",
+ "rand 0.8.5",
  "reqwest",
  "reth-ethereum-forks",
  "reth-execution-errors",
