@@ -17,11 +17,12 @@ use reqwest::blocking::Client;
 use serde_json::json;
 use serde::{Deserialize, Serialize};
 use once_cell::sync::Lazy;
+use reth_tracing::tracing::{debug, warn};
 
 // Define your RPC endpoint
 fn get_rpc_url() -> String {
     std::env::var("FORKING_RPC_URL").unwrap_or_else(|_| {
-        panic!("RPC_URL is not set. Please provide the RPC URL as an environment variable.");
+        "".to_string()
     })
 }
 
@@ -171,10 +172,13 @@ impl<DB> StateProviderDatabase<DB> {
                                 if Self::is_transient_error(error.code) && attempt < MAX_RETRIES {
                                     attempt += 1;
                                     let delay = Self::calculate_backoff_delay(attempt, BASE_DELAY_MS, MAX_BACKOFF_MS);
-                                    eprintln!(
-                                        "RPC error {}: {}. Retrying in {:?} (Attempt {}/{})...",
-                                        error.code, error.message, delay, attempt, MAX_RETRIES
-                                    );
+                                    warn!(target: "LZero",
+                                        error_code = error.code,
+                                        error_message = %error.message,
+                                        delay = ?delay,
+                                        attempt,
+                                        max_retries = MAX_RETRIES,
+                                        "RPC error occurred, retrying...");
                                     sleep(delay);
                                     continue;
                                 } else {
@@ -190,10 +194,11 @@ impl<DB> StateProviderDatabase<DB> {
                                     if attempt < MAX_RETRIES {
                                         attempt += 1;
                                         let delay = Self::calculate_backoff_delay(attempt, BASE_DELAY_MS, MAX_BACKOFF_MS);
-                                        eprintln!(
-                                            "No result in RPC response. Retrying in {:?} (Attempt {}/{})...",
-                                            delay, attempt, MAX_RETRIES
-                                        );
+                                        warn!(target: "LZero",
+                                        delay = ?delay,
+                                        attempt,
+                                        max_retries = MAX_RETRIES,
+                                        "No result in RPC response, retrying...");
                                         sleep(delay);
                                         continue;
                                     } else {
@@ -207,10 +212,12 @@ impl<DB> StateProviderDatabase<DB> {
                             if attempt < MAX_RETRIES {
                                 attempt += 1;
                                 let delay = Self::calculate_backoff_delay(attempt, BASE_DELAY_MS, MAX_BACKOFF_MS);
-                                eprintln!(
-                                    "Failed to parse JSON response: {}. Retrying in {:?} (Attempt {}/{})...",
-                                    e, delay, attempt, MAX_RETRIES
-                                );
+                                warn!(target: "LZero",
+                                        error = ?e,
+                                        delay = ?delay,
+                                        attempt,
+                                        max_retries = MAX_RETRIES,
+                                        "Failed to parse RPC response, retrying...");
                                 sleep(delay);
                                 continue;
                             } else {
@@ -224,10 +231,12 @@ impl<DB> StateProviderDatabase<DB> {
                     if attempt < MAX_RETRIES {
                         attempt += 1;
                         let delay = Self::calculate_backoff_delay(attempt, BASE_DELAY_MS, MAX_BACKOFF_MS);
-                        eprintln!(
-                            "HTTP request error: {}. Retrying in {:?} (Attempt {}/{})...",
-                            e, delay, attempt, MAX_RETRIES
-                        );
+                        warn!(target: "LZero",
+                                        error = ?e,
+                                        delay = ?delay,
+                                        attempt,
+                                        max_retries = MAX_RETRIES,
+                                        "HTTP RPC error occurred, retrying...");
                         sleep(delay);
                         continue;
                     } else {
@@ -328,13 +337,12 @@ impl<DB: EvmStateProvider> DatabaseRef for StateProviderDatabase<DB> {
             return Ok(self.basic_account(&address)?.map(Into::into));
         }
 
-        if self.basic_account(&address)?.is_some() {
-            println!("(LZero) - Found address {:?} in local storage", address);
+        if self.basic_account(&address)?.is_some() || get_rpc_url().is_empty() {
             return Ok(self.basic_account(&address)?.map(Into::into));
         }
 
         let block_height = get_block_height();
-        println!("(LZero) - Retrieving data from mainnet for address: {:?}", address);
+        debug!(target: "LZero", ?address, "Retrieving account info from other network");
         let balance_hex: String = self
             .rpc_call("eth_getBalance", json!([address, block_height]))
             .unwrap();
@@ -373,7 +381,6 @@ impl<DB: EvmStateProvider> DatabaseRef for StateProviderDatabase<DB> {
     ///
     /// Returns `Ok` with the bytecode if found, or the default bytecode otherwise.
     fn code_by_hash_ref(&self, code_hash: B256) -> Result<Bytecode, Self::Error> {
-        println!("(LZero) Querying bytecode by hash: {}", code_hash);
         Ok(self.bytecode_by_hash(&code_hash)?.unwrap_or_default().0)
     }
 
@@ -385,20 +392,14 @@ impl<DB: EvmStateProvider> DatabaseRef for StateProviderDatabase<DB> {
             return Ok(self.0.storage(address, B256::new(index.to_be_bytes()))?.unwrap_or_default());
         }
 
-        println!(
-            "(LZero) Querying storage for account: {:?} and storage key: {}",
-            address, index
-        );
-
         let local_val = self.0.storage(address, B256::new(index.to_be_bytes()))?.unwrap_or_default();
 
-        if local_val != U256::ZERO {
-            println!("(LZero) Found storage value in local storage for address: {:?}", address);
+        if local_val != U256::ZERO || get_rpc_url().is_empty() {
             return Ok(local_val.into());
         }
 
+        debug!(target: "LZero", ?address, ?index, "Retrieving storage slot from other network");
         let block_height = get_block_height();
-        println!("(LZero) Retrieving mainnet storage slot for address: {:?}", address);
         let index_hex = format!("0x{:x}", index);
         let storage_hex: String = self
             .rpc_call("eth_getStorageAt", json!([address, index_hex, block_height]))
@@ -414,7 +415,6 @@ impl<DB: EvmStateProvider> DatabaseRef for StateProviderDatabase<DB> {
     ///
     /// Returns `Ok` with the block hash if found, or the default hash otherwise.
     fn block_hash_ref(&self, number: u64) -> Result<B256, Self::Error> {
-        println!("(LZero) Querying block hash for number: {}", number);
         Ok(self.0.block_hash(number)?.unwrap_or_default())
     }
 }
