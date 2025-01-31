@@ -20,8 +20,14 @@ use once_cell::sync::Lazy;
 
 // Define your RPC endpoint
 fn get_rpc_url() -> String {
-    std::env::var("RPC_URL").unwrap_or_else(|_| {
+    std::env::var("FORKING_RPC_URL").unwrap_or_else(|_| {
         panic!("RPC_URL is not set. Please provide the RPC URL as an environment variable.");
+    })
+}
+
+fn get_block_height() -> String {
+    std::env::var("FORKING_BLOCK_HEIGHT").unwrap_or_else(|_| {
+        "0x14B5D8C".to_string()
     })
 }
 
@@ -327,15 +333,16 @@ impl<DB: EvmStateProvider> DatabaseRef for StateProviderDatabase<DB> {
             return Ok(self.basic_account(&address)?.map(Into::into));
         }
 
+        let block_height = get_block_height();
         println!("(LZero) - Retrieving data from mainnet for address: {:?}", address);
         let balance_hex: String = self
-            .rpc_call("eth_getBalance", json!([address, "0x14B5D8C"]))
+            .rpc_call("eth_getBalance", json!([address, block_height]))
             .unwrap();
         let nonce_hex: String = self
-            .rpc_call("eth_getTransactionCount", json!([address, "0x14B5D8C"]))
+            .rpc_call("eth_getTransactionCount", json!([address, block_height]))
             .unwrap();
         let code_hex: String = self
-            .rpc_call("eth_getCode", json!([address, "0x14B5D8C"]))
+            .rpc_call("eth_getCode", json!([address, block_height]))
             .unwrap();
 
         let balance = U256::from_str_radix(balance_hex.trim_start_matches("0x"), 16)
@@ -390,10 +397,11 @@ impl<DB: EvmStateProvider> DatabaseRef for StateProviderDatabase<DB> {
             return Ok(local_val.into());
         }
 
+        let block_height = get_block_height();
         println!("(LZero) Retrieving mainnet storage slot for address: {:?}", address);
         let index_hex = format!("0x{:x}", index);
         let storage_hex: String = self
-            .rpc_call("eth_getStorageAt", json!([address, index_hex, "0x14B5D8C"]))
+            .rpc_call("eth_getStorageAt", json!([address, index_hex, block_height]))
             .unwrap();
 
         let storage_u256 = U256::from_str_radix(storage_hex.trim_start_matches("0x"), 16)
