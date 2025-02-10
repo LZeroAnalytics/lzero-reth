@@ -5131,21 +5131,20 @@ dependencies = [
 
 [[package]]
 name = "moka"
-version = "0.12.8"
+version = "0.12.10"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "32cf62eb4dd975d2dde76432fb1075c49e3ee2331cf36f1f8fd4b66550d32b6f"
+checksum = "a9321642ca94a4282428e6ea4af8cc2ca4eac48ac7a6a4ea8f33f76d0ce70926"
 dependencies = [
  "crossbeam-channel",
  "crossbeam-epoch",
  "crossbeam-utils",
- "once_cell",
+ "loom",
  "parking_lot",
- "quanta",
+ "portable-atomic",
  "rustc_version 0.4.1",
  "smallvec",
  "tagptr",
  "thiserror 1.0.69",
- "triomphe",
  "uuid",
 ]
 
@@ -8938,6 +8937,7 @@ dependencies = [
  "alloy-consensus",
  "alloy-eips",
  "alloy-primitives",
+ "moka",
  "once_cell",
  "rand 0.8.5",
  "reqwest",
@@ -11454,12 +11454,6 @@ dependencies = [
  "hash-db",
  "rlp",
 ]
-
-[[package]]
-name = "triomphe"
-version = "0.1.11"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "859eb650cfee7434994602c3a68b25d77ad9e68c8a6cd491616ef86661382eb3"
 
 [[package]]
 name = "try-lock"

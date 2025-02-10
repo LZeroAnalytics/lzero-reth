@@ -17,7 +17,25 @@ use reqwest::blocking::Client;
 use serde_json::json;
 use serde::{Deserialize, Serialize};
 use once_cell::sync::Lazy;
+use moka::sync::Cache;
 use reth_tracing::tracing::{debug, warn};
+
+// Cache for AccountInfo keyed by Address.
+static ACCOUNT_CACHE: Lazy<Cache<Address, AccountInfo>> = Lazy::new(|| {
+    Cache::builder()
+        // Cache entries live for 5 minutes.
+        .time_to_live(Duration::from_secs(300))
+        .max_capacity(1000)
+        .build()
+});
+
+// Cache for storage values keyed by (Address, U256).
+static STORAGE_CACHE: Lazy<Cache<(Address, U256), U256>> = Lazy::new(|| {
+    Cache::builder()
+        .time_to_live(Duration::from_secs(300))
+        .max_capacity(1000)
+        .build()
+});
 
 // Define your RPC endpoint
 fn get_rpc_url() -> String {
@@ -341,6 +359,10 @@ impl<DB: EvmStateProvider> DatabaseRef for StateProviderDatabase<DB> {
             return Ok(self.basic_account(&address)?.map(Into::into));
         }
 
+        if let Some(cached_account) = ACCOUNT_CACHE.get(&address) {
+            return Ok(Some(cached_account));
+        }
+
         let block_height = get_block_height();
         debug!(target: "LZero", ?address, "Retrieving account info from other network");
         let balance_hex: String = self
@@ -374,6 +396,8 @@ impl<DB: EvmStateProvider> DatabaseRef for StateProviderDatabase<DB> {
             code_hash,
             code,
         };
+
+        ACCOUNT_CACHE.insert(address, account_info.clone());
         Ok(Some(account_info))
     }
 
@@ -398,6 +422,10 @@ impl<DB: EvmStateProvider> DatabaseRef for StateProviderDatabase<DB> {
             return Ok(local_val.into());
         }
 
+        if let Some(cached) = STORAGE_CACHE.get(&(address, index)) {
+            return Ok(cached);
+        }
+
         debug!(target: "LZero", ?address, ?index, "Retrieving storage slot from other network");
         let block_height = get_block_height();
         let index_hex = format!("0x{:x}", index);
@@ -408,6 +436,7 @@ impl<DB: EvmStateProvider> DatabaseRef for StateProviderDatabase<DB> {
         let storage_u256 = U256::from_str_radix(storage_hex.trim_start_matches("0x"), 16)
             .map_err(|e| format!("Invalid storage hex: {}", e)).unwrap();
 
+        STORAGE_CACHE.insert((address, index), storage_u256);
         Ok(storage_u256)
     }
 
