@@ -82,7 +82,6 @@ use reth::revm::db::{AccountStatus, BundleAccount, BundleState, CacheDB, EmptyDB
 use reth::revm::db::states::StorageSlot;
 use reth::revm::{DatabaseRef, TransitionState};
 use reth::rpc::eth::RpcNodeCore;
-use reth::utils::open_db_read_only;
 use reth_revm::primitives::Account;
 use reth_db::{mdbx::DatabaseArguments, ClientVersion, DatabaseEnv};
 

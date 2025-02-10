@@ -8993,7 +8993,6 @@ dependencies = [
  "reth-chainspec",
  "reth-consensus",
  "reth-consensus-common",
- "reth-db",
  "reth-engine-primitives",
  "reth-errors",
  "reth-evm",
@@ -9001,7 +9000,6 @@ dependencies = [
  "reth-network-api",
  "reth-network-peers",
  "reth-network-types",
- "reth-node-types",
  "reth-primitives",
  "reth-primitives-traits",
  "reth-provider",
@@ -9015,8 +9013,6 @@ dependencies = [
  "reth-tasks",
  "reth-testing-utils",
  "reth-transaction-pool",
- "reth-trie",
- "reth-trie-db",
  "revm",
  "revm-inspectors",
  "revm-primitives",
@@ -9052,7 +9048,6 @@ dependencies = [
  "reth-engine-primitives",
  "reth-network-peers",
  "reth-rpc-eth-api",
- "serde",
 ]
 
 [[package]]
