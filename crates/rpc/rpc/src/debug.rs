@@ -1,6 +1,6 @@
 use alloy_consensus::BlockHeader;
 use alloy_eips::{eip2718::Encodable2718, BlockId, BlockNumberOrTag};
-use alloy_primitives::{Address, Bytes, B256, U256};
+use alloy_primitives::{Address, Bytes, FixedBytes, B256, U256};
 use alloy_rlp::{Decodable, Encodable};
 use alloy_rpc_types_debug::ExecutionWitness;
 use alloy_rpc_types_eth::{
@@ -14,18 +14,15 @@ use alloy_rpc_types_trace::geth::{
 };
 use async_trait::async_trait;
 use jsonrpsee::core::RpcResult;
-use reth_chainspec::EthereumHardforks;
+use reth_chainspec::{ChainSpec, ChainSpecBuilder, EthereumHardforks};
 use reth_evm::{
     env::EvmEnv,
     execute::{BlockExecutorProvider, Executor},
     ConfigureEvmEnv,
 };
-use reth_primitives::{BlockExt, NodePrimitives, ReceiptWithBloom, SealedBlockWithSenders};
+use reth_primitives::{BlockExt, EthPrimitives, NodePrimitives, ReceiptWithBloom, SealedBlockWithSenders};
 use reth_primitives_traits::{Block as _, BlockBody, SignedTransaction};
-use reth_provider::{
-    BlockIdReader, BlockReaderIdExt, ChainSpecProvider, HeaderProvider, ProviderBlock,
-    ReceiptProviderIdExt, StateProofProvider, TransactionVariant,
-};
+use reth_provider::{AccountExtReader, BlockIdReader, BlockReaderIdExt, ChainSpecProvider, EthStorage, HeaderProvider, ProviderBlock, ProviderFactory, ReceiptProviderIdExt, StateProofProvider, StateRootProvider, StorageReader, StorageRootProvider, TransactionVariant};
 use reth_revm::{database::StateProviderDatabase, witness::ExecutionWitnessRecord};
 use reth_rpc_api::DebugApiServer;
 use reth_rpc_eth_api::{
@@ -42,14 +39,29 @@ use revm::{
 use revm_inspectors::tracing::{
     FourByteInspector, MuxInspector, TracingInspector, TracingInspectorConfig, TransactionContext,
 };
-use std::sync::Arc;
+use std::collections::{BTreeMap, BTreeSet, HashMap};
+use revm_primitives::db::Database;
 use tokio::sync::{AcquireError, OwnedSemaphorePermit};
+use std::{path::Path, sync::Arc};
+use reth_db::{open_db_read_only, DatabaseEnv};
+use reth_node_types::{NodeTypes, NodeTypesWithDBAdapter};
+use reth_provider::providers::StaticFileProvider;
+use reth_rpc_api::debug::{DumpBlockResponse, DumpInfo};
+use reth_trie_db::MerklePatriciaTrie;
 
 /// `debug` API implementation.
 ///
 /// This type provides the functionality for handling `debug` related requests.
 pub struct DebugApi<Eth, BlockExecutor> {
     inner: Arc<DebugApiInner<Eth, BlockExecutor>>,
+}
+
+struct SimpleNode;
+impl NodeTypes for SimpleNode {
+    type Primitives = EthPrimitives;
+    type ChainSpec = ChainSpec;
+    type StateCommitment = MerklePatriciaTrie;
+    type Storage = EthStorage;
 }
 
 // === impl DebugApi ===
@@ -1028,8 +1040,81 @@ where
         Ok(())
     }
 
-    async fn debug_dump_block(&self, _number: BlockId) -> RpcResult<()> {
-        Ok(())
+    async fn debug_dump_block(&self, number: BlockId) -> RpcResult<DumpBlockResponse> {
+        println!("(LZero) - Calling debug dump block: {}", number);
+        let db_path = "/data/reth/execution-data";
+        let db_path = Path::new(&db_path);
+        let db = open_db_read_only(db_path.join("db").as_path(), Default::default())
+            .expect("failed to open read-only DB");
+
+        let spec = ChainSpecBuilder::mainnet().build();
+        let factory = ProviderFactory::<NodeTypesWithDBAdapter<SimpleNode, Arc<DatabaseEnv>>>::new(
+            db.into(),
+            spec.into(),
+            StaticFileProvider::read_only(db_path.join("static_files"), true)
+                .expect("failed to open static files"),
+        );
+
+        let provider = factory.provider().expect("failed to get provider");
+
+        let block_number: u64 = number.as_u64().expect("Block number is in wrong format");
+        let changed_accounts: BTreeSet<Address> = provider
+            .changed_accounts_with_range(1..=block_number)
+            .expect("failed to get changed accounts");
+
+        let changed_storages: BTreeMap<Address, BTreeSet<FixedBytes<32>>> =
+            provider.changed_storages_with_range(1..=block_number)
+                .expect("failed to get changed storages");
+
+        println!("(LZero) - Changed accounts: {:?}", changed_accounts);
+        println!("(LZero) - Changed storages: {:?}", changed_storages);
+
+        let dump: DumpBlockResponse = self
+            .eth_api()
+            .spawn_with_state_at_block(number.into(), move |state| {
+                println!("(LZero) - Spawned state at block {}", block_number);
+                let mut accounts_map = HashMap::new();
+
+                // Iterate over each changed account.
+                for &account in &changed_accounts {
+                    let basic = match state.0.basic_account(&account) {
+                        Ok(Some(b)) => b,
+                        _ => continue,
+                    };
+
+                    // Retrieve the account's bytecode.
+                    let code = state.0.account_code(&account).unwrap_or_default();
+
+                    let mut storage_map = HashMap::new();
+                    if let Some(slots) = changed_storages.get(&account) {
+                        for &slot in slots {
+                            let value = match state.0.storage(account.clone(), slot) {
+                                Ok(Some(v)) => v,
+                                _ => U256::ZERO,
+                            };
+                            storage_map.insert(format!("{:x}", slot), format!("{:x}", value));
+                        }
+                    }
+
+                    let info = DumpInfo {
+                        balance: basic.balance.to_string(),
+                        nonce: basic.nonce,
+                        code: format!("{:?}", code),
+                        storage: storage_map,
+                    };
+
+                    accounts_map.insert(format!("{:x}", account), info);
+                }
+
+                Ok(DumpBlockResponse {
+                    accounts: accounts_map
+                })
+            })
+            .await
+            .expect("State spawn failed");
+
+        // Return the dump as the RPC result.
+        Ok(dump)
     }
 
     async fn debug_free_os_memory(&self) -> RpcResult<()> {

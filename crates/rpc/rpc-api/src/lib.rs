@@ -16,7 +16,7 @@
 
 mod admin;
 mod anvil;
-mod debug;
+pub mod debug;
 mod engine;
 mod ganache;
 mod hardhat;

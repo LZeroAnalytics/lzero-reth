@@ -85,7 +85,6 @@ use reth::rpc::eth::RpcNodeCore;
 use reth::utils::open_db_read_only;
 use reth_revm::primitives::Account;
 use reth_db::{mdbx::DatabaseArguments, ClientVersion, DatabaseEnv};
-use reth_evm_ethereum::execute::EthExecutionStrategy;
 
 fn main() {
     Cli::<EthereumChainSpecParser>::parse()

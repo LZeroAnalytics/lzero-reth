@@ -28,3 +28,5 @@ reth-chain-state.workspace = true
 reth-execution-types.workspace = true
 reth-errors.workspace = true
 reth-db.workspace = true
+serde.workspace = true
+jsonrpsee-core.workspace = true

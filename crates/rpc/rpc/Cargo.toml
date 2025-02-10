@@ -35,6 +35,10 @@ reth-rpc-eth-types.workspace = true
 reth-rpc-server-types.workspace = true
 reth-network-types.workspace = true
 reth-consensus.workspace = true
+reth-trie.workspace = true
+reth-db.workspace = true
+reth-node-types.workspace = true
+reth-trie-db.workspace = true
 
 # ethereum
 alloy-consensus.workspace = true

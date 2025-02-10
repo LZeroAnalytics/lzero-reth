@@ -1,11 +1,31 @@
+use std::collections::HashMap;
 use alloy_eips::{BlockId, BlockNumberOrTag};
 use alloy_primitives::{Address, Bytes, B256};
+use serde::{Deserialize, Serialize};
 use alloy_rpc_types_debug::ExecutionWitness;
 use alloy_rpc_types_eth::{transaction::TransactionRequest, Block, Bundle, StateContext};
 use alloy_rpc_types_trace::geth::{
     BlockTraceResult, GethDebugTracingCallOptions, GethDebugTracingOptions, GethTrace, TraceResult,
 };
 use jsonrpsee::{core::RpcResult, proc_macros::rpc};
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DumpInfo {
+    /// Account balance as a string.
+    pub balance: String,
+    /// Account nonce.
+    pub nonce: u64,
+    /// Account bytecode, hex-encoded.
+    pub code: String,
+    /// Account storage: mapping of storage slot (hex) to value (hex).
+    pub storage: HashMap<String, String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DumpBlockResponse {
+    /// Mapping from hex-encoded addresses to account information.
+    pub accounts: HashMap<String, DumpInfo>,
+}
 
 /// Debug rpc interface.
 #[cfg_attr(not(feature = "client"), rpc(server, namespace = "debug"))]
@@ -199,7 +219,7 @@ pub trait DebugApi {
     /// Retrieves the state that corresponds to the block number and returns a list of accounts
     /// (including storage and code).
     #[method(name = "dumpBlock")]
-    async fn debug_dump_block(&self, number: BlockId) -> RpcResult<()>;
+    async fn debug_dump_block(&self, number: BlockId) -> RpcResult<DumpBlockResponse>;
 
     /// Forces garbage collection.
     #[method(name = "freeOSMemory")]
