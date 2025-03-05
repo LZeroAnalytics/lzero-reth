@@ -99,17 +99,14 @@ pub static OVERRIDE_ACCOUNTS: Lazy<HashMap<Address, OverrideAccount>> = Lazy::ne
 // Cache for AccountInfo keyed by Address.
 static ACCOUNT_CACHE: Lazy<Cache<Address, AccountInfo>> = Lazy::new(|| {
     Cache::builder()
-        // Cache entries live for 5 minutes.
-        .time_to_live(Duration::from_secs(300))
-        .max_capacity(1000)
+        .max_capacity(u64::MAX)
         .build()
 });
 
 // Cache for storage values keyed by (Address, U256).
 static STORAGE_CACHE: Lazy<Cache<(Address, U256), U256>> = Lazy::new(|| {
     Cache::builder()
-        .time_to_live(Duration::from_secs(300))
-        .max_capacity(1000)
+        .max_capacity(u64::MAX)
         .build()
 });
 
@@ -128,7 +125,7 @@ fn get_block_height() -> String {
 
 static GLOBAL_CLIENT: Lazy<Client> = Lazy::new(|| {
     Client::builder()
-        .timeout(std::time::Duration::from_secs(10))
+        .timeout(std::time::Duration::from_secs(120))
         .build()
         .expect("Failed to build reqwest Client")
 });
@@ -432,6 +429,7 @@ impl<DB: EvmStateProvider> DatabaseRef for StateProviderDatabase<DB> {
         }
 
         if self.basic_account(&address)?.is_some() || get_rpc_url().is_empty() {
+            ACCOUNT_CACHE.invalidate(&address);
             return Ok(self.basic_account(&address)?.map(Into::into));
         }
 
@@ -507,13 +505,16 @@ impl<DB: EvmStateProvider> DatabaseRef for StateProviderDatabase<DB> {
         let local_val = self.0.storage(address, B256::new(index.to_be_bytes()))?.unwrap_or_default();
 
         if local_val != U256::ZERO || get_rpc_url().is_empty() {
+            STORAGE_CACHE.invalidate(&(address, index));
             return Ok(local_val.into());
         }
 
         if let Some(override_acc) = OVERRIDE_ACCOUNTS.get(&address) {
             if let Some(val) = override_acc.storage.get(&index) {
+                STORAGE_CACHE.invalidate(&(address, index));
                 return Ok(*val);
             } else {
+                STORAGE_CACHE.invalidate(&(address, index));
                 return Ok(U256::ZERO);
             }
         }
