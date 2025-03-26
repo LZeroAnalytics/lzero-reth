@@ -83,7 +83,7 @@ use reth::revm::db::states::StorageSlot;
 use reth::revm::{DatabaseRef, TransitionState};
 use reth::rpc::eth::RpcNodeCore;
 use reth_revm::primitives::Account;
-use reth_db::{mdbx::DatabaseArguments, ClientVersion, DatabaseEnv};
+use reth_db::{mdbx::DatabaseArguments, DatabaseEnv};
 
 fn main() {
     Cli::<EthereumChainSpecParser>::parse()
