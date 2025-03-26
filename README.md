@@ -1,12 +1,10 @@
-# reth
+# Bloctopus reth
 
 [![CI status](https://github.com/paradigmxyz/reth/workflows/unit/badge.svg)][gh-ci]
 [![cargo-deny status](https://github.com/paradigmxyz/reth/workflows/deny/badge.svg)][gh-deny]
 [![Telegram Chat][tg-badge]][tg-url]
 
 **Modular, contributor-friendly and blazing-fast implementation of the Ethereum protocol**
-
-![](./assets/reth-prod.png)
 
 **[Install](https://paradigmxyz.github.io/reth/installation/installation.html)**
 | [User Book](https://reth.rs)
@@ -16,6 +14,16 @@
 [gh-ci]: https://github.com/paradigmxyz/reth/actions/workflows/unit.yml
 [gh-deny]: https://github.com/paradigmxyz/reth/actions/workflows/deny.yml
 [tg-badge]: https://img.shields.io/endpoint?color=neon&logo=telegram&label=chat&url=https%3A%2F%2Ftg.sumanjay.workers.dev%2Fparadigm%5Freth
+
+## What is Bloctopus Reth?
+
+Bloctopus Reth is a fork of the official Reth implementation. It adds forking capabilities so that users can create networks that 
+have full access to mainnet data. It also supports Chainlink data feeds. It's intended to be used with this [ethereum kurtosis package](https://github.com/LZeroAnalytics/ethereum-package).
+
+### How to use it
+1. Build your own docker image which will use the custom example under examples/lzero-custom-reth.
+2. Define FORKING_RPC_URL (e.g. Alchemy RPC) and optionally FORKING_BLOCK_HEIGHT and PRICE_FEEDS (e.g. [Chainlink price feeds](https://docs.chain.link/data-feeds/price-feeds/addresses?network=ethereum&page=1) formatted as json with an address field) as environment variables
+3. Run the generated executable at /usr/local/bin/lzero-custom-reth
 
 ## What is Reth?
 
