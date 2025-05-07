@@ -22,6 +22,13 @@ use moka::sync::Cache;
 use reth_tracing::tracing::{debug, warn};
 use crate::special_accounts::{is_price_feed, is_special_address, OVERRIDE_ACCOUNTS};
 
+static GLOBAL_CLIENT: Lazy<Client> = Lazy::new(|| {
+    Client::builder()
+        .timeout(std::time::Duration::from_secs(120))
+        .build()
+        .expect("Failed to build reqwest Client")
+});
+
 // Cache for AccountInfo keyed by Address.
 static ACCOUNT_CACHE: Lazy<Cache<Address, AccountInfo>> = Lazy::new(|| {
     Cache::builder()
@@ -43,18 +50,98 @@ fn get_rpc_url() -> String {
     })
 }
 
-fn get_block_height() -> String {
-    std::env::var("FORKING_BLOCK_HEIGHT").unwrap_or_else(|_| {
-        "0x14B5D8C".to_string()
-    })
+fn get_latest_block_number() -> Result<U256, String> {
+    let request = JsonRpcRequest {
+        jsonrpc: "2.0",
+        method: "eth_blockNumber",
+        params: json!([]),
+        id: 1,
+    };
+    let rpc_url = get_rpc_url();
+
+    let resp = GLOBAL_CLIENT
+        .post(rpc_url)
+        .json(&request)
+        .send()
+        .map_err(|e| format!("Request error: {}", e))?;
+
+    let rpc_response: JsonRpcResponse<String> = resp.json().map_err(|e| format!("Invalid JSON: {}", e))?;
+
+    if let Some(error) = rpc_response.error {
+        return Err(format!("RPC error: {}", error.message));
+    }
+
+    let block_hex = rpc_response.result.ok_or_else(|| "No result returned".to_string())?;
+    U256::from_str_radix(block_hex.trim_start_matches("0x"), 16)
+        .map_err(|e| format!("Could not parse block number: {}", e))
 }
 
-static GLOBAL_CLIENT: Lazy<Client> = Lazy::new(|| {
-    Client::builder()
-        .timeout(std::time::Duration::from_secs(120))
-        .build()
-        .expect("Failed to build reqwest Client")
-});
+fn get_block_height() -> String {
+    // Attempt to read the environment variable. If missing, treat it as "latest".
+    let block_env = std::env::var("FORKING_BLOCK_HEIGHT").unwrap_or_else(|_| "latest".to_string());
+    warn!(target: "Bloctopus", "Using block height {}", block_env);
+
+    // If set to "latest", fetch the actual latest block via RPC.
+    if block_env == "latest" {
+        match get_latest_block_number() {
+            Ok(num_hex) => format!("0x{:x}", num_hex),
+            Err(e) => {
+                warn!(
+                    target: "LZero",
+                    "Failed to retrieve latest block from RPC: {}. Using a fallback.",
+                    e
+                );
+                // Fallback if retrieval fails.
+                "0x14B5D8C".to_string()
+            }
+        }
+    } else {
+        // Attempt to parse the user-provided block_env as a valid hexadecimal value.
+        // If it fails to parse or doesn't start with 0x, we'll also fetch the latest block.
+        if block_env.starts_with("0x") {
+            if U256::from_str_radix(block_env.trim_start_matches("0x"), 16).is_ok() {
+                // If it's a well-formed hex string, just use it.
+                block_env
+            } else {
+                // If it’s invalid hex, default to the latest block.
+                warn!(
+                    target: "LZero",
+                    "Invalid block height {}, defaulting to latest.",
+                    block_env
+                );
+                match get_latest_block_number() {
+                    Ok(num_hex) => format!("0x{:x}", num_hex),
+                    Err(e) => {
+                        warn!(
+                            target: "LZero",
+                            "Failed to retrieve latest block from RPC: {}. Using a fallback.",
+                            e
+                        );
+                        "0x14B5D8C".to_string()
+                    }
+                }
+            }
+        } else {
+            // If it doesn't even start with 0x, consider it invalid, get latest.
+            warn!(
+                target: "LZero",
+                "Invalid block height {}, defaulting to latest.",
+                block_env
+            );
+            match get_latest_block_number() {
+                Ok(num_hex) => format!("0x{:x}", num_hex),
+                Err(e) => {
+                    warn!(
+                        target: "LZero",
+                        "Failed to retrieve latest block from RPC: {}. Using a fallback.",
+                        e
+                    );
+                    "0x14B5D8C".to_string()
+                }
+            }
+        }
+    }
+}
 
 // JSON-RPC request and response structures
 #[derive(Serialize)]
