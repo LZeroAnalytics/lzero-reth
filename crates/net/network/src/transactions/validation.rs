@@ -44,7 +44,7 @@ pub trait PartiallyFilterMessage {
                 msg=?msg,
                 "empty payload"
             );
-            return (FilterOutcome::ReportPeer, PartiallyValidData::empty_eth66())
+            return (FilterOutcome::ReportPeer, PartiallyValidData::empty_eth66());
         }
 
         // 2. checks if announcement is spam packed with duplicate hashes

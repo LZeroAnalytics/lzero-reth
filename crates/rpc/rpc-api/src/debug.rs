@@ -141,7 +141,7 @@ pub trait DebugApi {
     /// The first argument is the block number or tag.
     #[method(name = "executionWitness")]
     async fn debug_execution_witness(&self, block: BlockNumberOrTag)
-                                     -> RpcResult<ExecutionWitness>;
+        -> RpcResult<ExecutionWitness>;
 
     /// The `debug_executionWitnessByBlockHash` method allows for re-execution of a block with the
     /// purpose of generating an execution witness. The witness comprises of a map of all hashed

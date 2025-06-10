@@ -1,23 +1,23 @@
 use crate::primitives::alloy_primitives::{BlockNumber, StorageKey, StorageValue};
+use crate::special_accounts::{is_price_feed, is_special_address, OVERRIDE_ACCOUNTS};
 use alloy_primitives::{Address, Bytes, B256, U256};
 use core::ops::{Deref, DerefMut};
 use core::str::FromStr;
-use std::collections::HashMap;
-use std::thread::sleep;
-use std::time::{Duration};
+use moka::sync::Cache;
+use once_cell::sync::Lazy;
 use rand::Rng;
+use reqwest::blocking::Client;
 use reth_primitives_traits::Account;
 use reth_storage_api::{AccountReader, BlockHashReader, StateProvider};
 use reth_storage_errors::provider::{ProviderError, ProviderResult};
-use revm::{bytecode::Bytecode, state::AccountInfo, Database, DatabaseRef};
-use revm::primitives::hex;
-use reqwest::blocking::Client;
-use serde_json::json;
-use serde::{Deserialize, Serialize};
-use once_cell::sync::Lazy;
-use moka::sync::Cache;
 use reth_tracing::tracing::{debug, warn};
-use crate::special_accounts::{is_price_feed, is_special_address, OVERRIDE_ACCOUNTS};
+use revm::primitives::hex;
+use revm::{bytecode::Bytecode, state::AccountInfo, Database, DatabaseRef};
+use serde::{Deserialize, Serialize};
+use serde_json::json;
+use std::collections::HashMap;
+use std::thread::sleep;
+use std::time::Duration;
 
 static GLOBAL_CLIENT: Lazy<Client> = Lazy::new(|| {
     Client::builder()
@@ -27,33 +27,21 @@ static GLOBAL_CLIENT: Lazy<Client> = Lazy::new(|| {
 });
 
 // Cache for AccountInfo keyed by Address.
-static ACCOUNT_CACHE: Lazy<Cache<Address, AccountInfo>> = Lazy::new(|| {
-    Cache::builder()
-        .max_capacity(u64::MAX)
-        .build()
-});
+static ACCOUNT_CACHE: Lazy<Cache<Address, AccountInfo>> =
+    Lazy::new(|| Cache::builder().max_capacity(u64::MAX).build());
 
 // Cache for storage values keyed by (Address, U256).
-static STORAGE_CACHE: Lazy<Cache<(Address, U256), U256>> = Lazy::new(|| {
-    Cache::builder()
-        .max_capacity(u64::MAX)
-        .build()
-});
+static STORAGE_CACHE: Lazy<Cache<(Address, U256), U256>> =
+    Lazy::new(|| Cache::builder().max_capacity(u64::MAX).build());
 
 // Define your RPC endpoint
 fn get_rpc_url() -> String {
-    std::env::var("FORKING_RPC_URL").unwrap_or_else(|_| {
-        "".to_string()
-    })
+    std::env::var("FORKING_RPC_URL").unwrap_or_else(|_| "".to_string())
 }
 
 fn get_latest_block_number() -> Result<U256, String> {
-    let request = JsonRpcRequest {
-        jsonrpc: "2.0",
-        method: "eth_blockNumber",
-        params: json!([]),
-        id: 1,
-    };
+    let request =
+        JsonRpcRequest { jsonrpc: "2.0", method: "eth_blockNumber", params: json!([]), id: 1 };
     let rpc_url = get_rpc_url();
 
     let resp = GLOBAL_CLIENT
@@ -62,7 +50,8 @@ fn get_latest_block_number() -> Result<U256, String> {
         .send()
         .map_err(|e| format!("Request error: {}", e))?;
 
-    let rpc_response: JsonRpcResponse<String> = resp.json().map_err(|e| format!("Invalid JSON: {}", e))?;
+    let rpc_response: JsonRpcResponse<String> =
+        resp.json().map_err(|e| format!("Invalid JSON: {}", e))?;
 
     if let Some(error) = rpc_response.error {
         return Err(format!("RPC error: {}", error.message));
@@ -256,10 +245,7 @@ impl<DB> StateProviderDatabase<DB> {
             let rpc_url = get_rpc_url();
 
             // Send the HTTP request
-            let response = GLOBAL_CLIENT
-                .post(rpc_url)
-                .json(&request)
-                .send();
+            let response = GLOBAL_CLIENT.post(rpc_url).json(&request).send();
 
             match response {
                 Ok(resp) => {
@@ -272,7 +258,11 @@ impl<DB> StateProviderDatabase<DB> {
                                 // Decide whether to retry based on error code
                                 if Self::is_transient_error(error.code) && attempt < MAX_RETRIES {
                                     attempt += 1;
-                                    let delay = Self::calculate_backoff_delay(attempt, BASE_DELAY_MS, MAX_BACKOFF_MS);
+                                    let delay = Self::calculate_backoff_delay(
+                                        attempt,
+                                        BASE_DELAY_MS,
+                                        MAX_BACKOFF_MS,
+                                    );
                                     warn!(target: "LZero",
                                         error_code = error.code,
                                         error_message = %error.message,
@@ -284,7 +274,10 @@ impl<DB> StateProviderDatabase<DB> {
                                     continue;
                                 } else {
                                     // Non-retriable error or max retries reached
-                                    return Err(format!("RPC error {}: {}", error.code, error.message));
+                                    return Err(format!(
+                                        "RPC error {}: {}",
+                                        error.code, error.message
+                                    ));
                                 }
                             }
 
@@ -294,7 +287,11 @@ impl<DB> StateProviderDatabase<DB> {
                                 None => {
                                     if attempt < MAX_RETRIES {
                                         attempt += 1;
-                                        let delay = Self::calculate_backoff_delay(attempt, BASE_DELAY_MS, MAX_BACKOFF_MS);
+                                        let delay = Self::calculate_backoff_delay(
+                                            attempt,
+                                            BASE_DELAY_MS,
+                                            MAX_BACKOFF_MS,
+                                        );
                                         warn!(target: "LZero",
                                         delay = ?delay,
                                         attempt,
@@ -312,7 +309,11 @@ impl<DB> StateProviderDatabase<DB> {
                             // JSON parsing error
                             if attempt < MAX_RETRIES {
                                 attempt += 1;
-                                let delay = Self::calculate_backoff_delay(attempt, BASE_DELAY_MS, MAX_BACKOFF_MS);
+                                let delay = Self::calculate_backoff_delay(
+                                    attempt,
+                                    BASE_DELAY_MS,
+                                    MAX_BACKOFF_MS,
+                                );
                                 warn!(target: "LZero",
                                         error = ?e,
                                         delay = ?delay,
@@ -331,7 +332,8 @@ impl<DB> StateProviderDatabase<DB> {
                     // Network or request error
                     if attempt < MAX_RETRIES {
                         attempt += 1;
-                        let delay = Self::calculate_backoff_delay(attempt, BASE_DELAY_MS, MAX_BACKOFF_MS);
+                        let delay =
+                            Self::calculate_backoff_delay(attempt, BASE_DELAY_MS, MAX_BACKOFF_MS);
                         warn!(target: "LZero",
                                         error = ?e,
                                         delay = ?delay,
@@ -432,28 +434,29 @@ impl<DB: EvmStateProvider> DatabaseRef for StateProviderDatabase<DB> {
         if is_price_feed(&address) {
             let block_height = get_block_height();
             debug!(target: "LZero", ?address, "Retrieving account info via RPC because address is in price feed index");
-            let balance_hex: String = self.rpc_call("eth_getBalance", json!([address, block_height])).unwrap();
-            let nonce_hex: String = self.rpc_call("eth_getTransactionCount", json!([address, block_height])).unwrap();
-            let code_hex: String = self.rpc_call("eth_getCode", json!([address, block_height])).unwrap();
+            let balance_hex: String =
+                self.rpc_call("eth_getBalance", json!([address, block_height])).unwrap();
+            let nonce_hex: String =
+                self.rpc_call("eth_getTransactionCount", json!([address, block_height])).unwrap();
+            let code_hex: String =
+                self.rpc_call("eth_getCode", json!([address, block_height])).unwrap();
 
             let balance = U256::from_str_radix(balance_hex.trim_start_matches("0x"), 16)
-                .map_err(|e| format!("Invalid balance hex: {}", e)).unwrap();
+                .map_err(|e| format!("Invalid balance hex: {}", e))
+                .unwrap();
             let nonce = u64::from_str_radix(nonce_hex.trim_start_matches("0x"), 16)
-                .map_err(|e| format!("Invalid nonce hex: {}", e)).unwrap();
+                .map_err(|e| format!("Invalid nonce hex: {}", e))
+                .unwrap();
             let code_bytes = hex::decode(code_hex.trim_start_matches("0x"))
-                .map_err(|e| format!("Invalid code bytes hex: {}", e)).unwrap();
+                .map_err(|e| format!("Invalid code bytes hex: {}", e))
+                .unwrap();
             let code_hash = crate::primitives::keccak256(&code_bytes);
             let code = if code_bytes.is_empty() {
                 None
             } else {
                 Some(Bytecode::new_raw(Bytes::from(code_bytes)))
             };
-            let account_info = AccountInfo {
-                balance,
-                nonce,
-                code_hash,
-                code,
-            };
+            let account_info = AccountInfo { balance, nonce, code_hash, code };
             return Ok(Some(account_info));
         }
 
@@ -466,7 +469,9 @@ impl<DB: EvmStateProvider> DatabaseRef for StateProviderDatabase<DB> {
             let account_info = AccountInfo {
                 balance: override_acc.balance,
                 nonce: override_acc.nonce,
-                code_hash: override_acc.code.as_ref()
+                code_hash: override_acc
+                    .code
+                    .as_ref()
                     .map(|code| crate::primitives::keccak256(&code.bytes()))
                     .unwrap_or_default(),
                 code: override_acc.code.clone(),
@@ -480,23 +485,23 @@ impl<DB: EvmStateProvider> DatabaseRef for StateProviderDatabase<DB> {
 
         let block_height = get_block_height();
         debug!(target: "LZero", ?address, "Retrieving account info from other network");
-        let balance_hex: String = self
-            .rpc_call("eth_getBalance", json!([address, block_height]))
-            .unwrap();
-        let nonce_hex: String = self
-            .rpc_call("eth_getTransactionCount", json!([address, block_height]))
-            .unwrap();
-        let code_hex: String = self
-            .rpc_call("eth_getCode", json!([address, block_height]))
-            .unwrap();
+        let balance_hex: String =
+            self.rpc_call("eth_getBalance", json!([address, block_height])).unwrap();
+        let nonce_hex: String =
+            self.rpc_call("eth_getTransactionCount", json!([address, block_height])).unwrap();
+        let code_hex: String =
+            self.rpc_call("eth_getCode", json!([address, block_height])).unwrap();
 
         let balance = U256::from_str_radix(balance_hex.trim_start_matches("0x"), 16)
-            .map_err(|e| format!("Invalid balance hex: {}", e)).unwrap();
+            .map_err(|e| format!("Invalid balance hex: {}", e))
+            .unwrap();
         let nonce = u64::from_str_radix(nonce_hex.trim_start_matches("0x"), 16)
-            .map_err(|e| format!("Invalid nonce hex: {}", e)).unwrap();
+            .map_err(|e| format!("Invalid nonce hex: {}", e))
+            .unwrap();
 
         let code_bytes = hex::decode(code_hex.trim_start_matches("0x"))
-            .map_err(|e| format!("Invalid code bytes hex: {}", e)).unwrap();
+            .map_err(|e| format!("Invalid code bytes hex: {}", e))
+            .unwrap();
 
         let code_hash = crate::primitives::keccak256(&code_bytes);
         let code = if code_bytes.is_empty() {
@@ -505,12 +510,7 @@ impl<DB: EvmStateProvider> DatabaseRef for StateProviderDatabase<DB> {
             Some(Bytecode::new_raw(Bytes::from(code_bytes)))
         };
 
-        let account_info = AccountInfo {
-            balance,
-            nonce,
-            code_hash,
-            code,
-        };
+        let account_info = AccountInfo { balance, nonce, code_hash, code };
 
         ACCOUNT_CACHE.insert(address, account_info.clone());
         Ok(Some(account_info))
@@ -528,7 +528,10 @@ impl<DB: EvmStateProvider> DatabaseRef for StateProviderDatabase<DB> {
     /// Returns `Ok` with the storage value, or the default value if not found.
     fn storage_ref(&self, address: Address, index: U256) -> Result<U256, Self::Error> {
         if is_special_address(&address) {
-            return Ok(self.0.storage(address, B256::new(index.to_be_bytes()))?.unwrap_or_default());
+            return Ok(self
+                .0
+                .storage(address, B256::new(index.to_be_bytes()))?
+                .unwrap_or_default());
         }
 
         // USe RPC if address is a Chainlink price feed
@@ -536,13 +539,17 @@ impl<DB: EvmStateProvider> DatabaseRef for StateProviderDatabase<DB> {
             let block_height = get_block_height();
             let index_hex = format!("0x{:x}", index);
             debug!(target: "LZero", ?address, ?index, "Retrieving storage slot via RPC because address is in price feed index");
-            let storage_hex: String = self.rpc_call("eth_getStorageAt", json!([address, index_hex, block_height])).unwrap();
+            let storage_hex: String = self
+                .rpc_call("eth_getStorageAt", json!([address, index_hex, block_height]))
+                .unwrap();
             let storage_u256 = U256::from_str_radix(storage_hex.trim_start_matches("0x"), 16)
-                .map_err(|e| format!("Invalid storage hex: {}", e)).unwrap();
+                .map_err(|e| format!("Invalid storage hex: {}", e))
+                .unwrap();
             return Ok(storage_u256);
         }
 
-        let local_val = self.0.storage(address, B256::new(index.to_be_bytes()))?.unwrap_or_default();
+        let local_val =
+            self.0.storage(address, B256::new(index.to_be_bytes()))?.unwrap_or_default();
 
         if local_val != U256::ZERO || get_rpc_url().is_empty() {
             STORAGE_CACHE.invalidate(&(address, index));
@@ -566,12 +573,12 @@ impl<DB: EvmStateProvider> DatabaseRef for StateProviderDatabase<DB> {
         debug!(target: "LZero", ?address, ?index, "Retrieving storage slot from other network");
         let block_height = get_block_height();
         let index_hex = format!("0x{:x}", index);
-        let storage_hex: String = self
-            .rpc_call("eth_getStorageAt", json!([address, index_hex, block_height]))
-            .unwrap();
+        let storage_hex: String =
+            self.rpc_call("eth_getStorageAt", json!([address, index_hex, block_height])).unwrap();
 
         let storage_u256 = U256::from_str_radix(storage_hex.trim_start_matches("0x"), 16)
-            .map_err(|e| format!("Invalid storage hex: {}", e)).unwrap();
+            .map_err(|e| format!("Invalid storage hex: {}", e))
+            .unwrap();
 
         STORAGE_CACHE.insert((address, index), storage_u256);
         Ok(storage_u256)

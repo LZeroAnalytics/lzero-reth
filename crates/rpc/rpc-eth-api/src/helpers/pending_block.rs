@@ -154,9 +154,9 @@ pub trait LoadPendingBlock:
             // check if the block is still good
             if let Some(pending_block) = lock.as_ref() {
                 // this is guaranteed to be the `latest` header
-                if pending.evm_env.block_env.number == pending_block.block.number() &&
-                    parent.hash() == pending_block.block.parent_hash() &&
-                    now <= pending_block.expires_at
+                if pending.evm_env.block_env.number == pending_block.block.number()
+                    && parent.hash() == pending_block.block.parent_hash()
+                    && now <= pending_block.expires_at
                 {
                     return Ok(Some((pending_block.block.clone(), pending_block.receipts.clone())));
                 }
@@ -173,7 +173,7 @@ pub trait LoadPendingBlock:
                 Ok(block) => block,
                 Err(err) => {
                     debug!(target: "rpc", "Failed to build pending block: {:?}", err);
-                    return Ok(None)
+                    return Ok(None);
                 }
             };
 
@@ -252,7 +252,7 @@ pub trait LoadPendingBlock:
                         block_gas_limit,
                     ),
                 );
-                continue
+                continue;
             }
 
             if pool_tx.origin.is_private() {
@@ -265,7 +265,7 @@ pub trait LoadPendingBlock:
                         InvalidTransactionError::TxTypeNotSupported,
                     ),
                 );
-                continue
+                continue;
             }
 
             // convert tx to a signed transaction
@@ -286,7 +286,7 @@ pub trait LoadPendingBlock:
                             blob_params.max_blob_gas_per_block(),
                         ),
                     );
-                    continue
+                    continue;
                 }
             }
 
@@ -308,7 +308,7 @@ pub trait LoadPendingBlock:
                             ),
                         );
                     }
-                    continue
+                    continue;
                 }
                 // this is an error that we should treat as fatal for this attempt
                 Err(err) => return Err(Self::Error::from_eth_err(err)),
