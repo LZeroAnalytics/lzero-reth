@@ -36,7 +36,7 @@ static STORAGE_CACHE: Lazy<Cache<(Address, U256), U256>> =
 
 // Define your RPC endpoint
 fn get_rpc_url() -> String {
-    std::env::var("FORKING_RPC_URL").unwrap_or_else(|_| "".to_string())
+    std::env::var("FORKING_RPC_URL").unwrap_or_else(|_| String::new())
 }
 
 fn get_latest_block_number() -> Result<U256, String> {
@@ -140,8 +140,6 @@ struct JsonRpcRequest<'a> {
 
 #[derive(Deserialize)]
 struct JsonRpcResponse<T> {
-    jsonrpc: String,
-    id: u64,
     result: Option<T>,
     error: Option<JsonRpcError>,
 }
@@ -272,13 +270,12 @@ impl<DB> StateProviderDatabase<DB> {
                                         "RPC error occurred, retrying...");
                                     sleep(delay);
                                     continue;
-                                } else {
-                                    // Non-retriable error or max retries reached
-                                    return Err(format!(
-                                        "RPC error {}: {}",
-                                        error.code, error.message
-                                    ));
                                 }
+                                // Non-retriable error or max retries reached
+                                return Err(format!(
+                                    "RPC error {}: {}",
+                                    error.code, error.message
+                                ));
                             }
 
                             // Check if the result is present
@@ -299,9 +296,8 @@ impl<DB> StateProviderDatabase<DB> {
                                         "No result in RPC response, retrying...");
                                         sleep(delay);
                                         continue;
-                                    } else {
-                                        return Err("No result in RPC response".to_string());
                                     }
+                                    return Err("No result in RPC response".to_string());
                                 }
                             }
                         }
@@ -322,9 +318,8 @@ impl<DB> StateProviderDatabase<DB> {
                                         "Failed to parse RPC response, retrying...");
                                 sleep(delay);
                                 continue;
-                            } else {
-                                return Err(format!("Failed to parse JSON response: {}", e));
                             }
+                            return Err(format!("Failed to parse JSON response: {}", e));
                         }
                     }
                 }
@@ -342,16 +337,15 @@ impl<DB> StateProviderDatabase<DB> {
                                         "HTTP RPC error occurred, retrying...");
                         sleep(delay);
                         continue;
-                    } else {
-                        return Err(format!("HTTP request error: {}", e));
                     }
+                    return Err(format!("HTTP request error: {}", e));
                 }
             }
         }
     }
 
     /// Determines if an RPC error code is transient and worth retrying
-    fn is_transient_error(_code: i64) -> bool {
+    const fn is_transient_error(_code: i64) -> bool {
         true
     }
 
@@ -360,7 +354,7 @@ impl<DB> StateProviderDatabase<DB> {
         let exponential_delay = base_delay_ms * 2u64.pow(attempt - 1);
         let capped_delay = exponential_delay.min(max_delay_ms);
         // Add jitter: random value between 0 and 100ms
-        let jitter = rand::thread_rng().gen_range(0..100);
+        let jitter = rand::rng().random_range(0..100);
         Duration::from_millis(capped_delay + jitter)
     }
 }
@@ -472,7 +466,7 @@ impl<DB: EvmStateProvider> DatabaseRef for StateProviderDatabase<DB> {
                 code_hash: override_acc
                     .code
                     .as_ref()
-                    .map(|code| crate::primitives::keccak256(&code.bytes()))
+                    .map(|code| crate::primitives::keccak256(code.bytes()))
                     .unwrap_or_default(),
                 code: override_acc.code.clone(),
             };
@@ -553,17 +547,16 @@ impl<DB: EvmStateProvider> DatabaseRef for StateProviderDatabase<DB> {
 
         if local_val != U256::ZERO || get_rpc_url().is_empty() {
             STORAGE_CACHE.invalidate(&(address, index));
-            return Ok(local_val.into());
+            return Ok(local_val);
         }
 
         if let Some(override_acc) = OVERRIDE_ACCOUNTS.get(&address) {
             if let Some(val) = override_acc.storage.get(&index) {
                 STORAGE_CACHE.invalidate(&(address, index));
                 return Ok(*val);
-            } else {
-                STORAGE_CACHE.invalidate(&(address, index));
-                return Ok(U256::ZERO);
             }
+            STORAGE_CACHE.invalidate(&(address, index));
+            return Ok(U256::ZERO);
         }
 
         if let Some(cached) = STORAGE_CACHE.get(&(address, index)) {

@@ -66,10 +66,8 @@ pub static OVERRIDE_ACCOUNTS: Lazy<HashMap<Address, OverrideAccount>> = Lazy::ne
         U256::from_str("0x0de0b6b3a7640000").unwrap(),
     );
 
-    accounts.insert(
-        addr1,
-        OverrideAccount { balance: U256::ZERO, nonce: 0, code: code.clone(), storage: storage1 },
-    );
+    accounts
+        .insert(addr1, OverrideAccount { balance: U256::ZERO, nonce: 0, code, storage: storage1 });
 
     accounts
 });
@@ -95,7 +93,7 @@ pub static PRICE_FEED_ADDRESSES: Lazy<HashSet<Address>> = Lazy::new(|| {
     } else {
         let feeds: HashMap<String, PriceFeed> =
             serde_json::from_str(&json_str).expect("Failed to parse PRICE_FEEDS JSON");
-        feeds.into_iter().map(|(_key, feed)| feed.address).collect()
+        feeds.into_values().map(|feed| feed.address).collect()
     }
 });
 
