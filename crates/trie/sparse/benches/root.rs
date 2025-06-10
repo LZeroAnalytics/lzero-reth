@@ -1,6 +1,6 @@
 #![allow(missing_docs)]
 
-use alloy_primitives::{map::B256HashMap, B256, U256};
+use alloy_primitives::{map::B256Map, B256, U256};
 use criterion::{criterion_group, criterion_main, BenchmarkId, Criterion};
 use itertools::Itertools;
 use proptest::{prelude::*, strategy::ValueTree, test_runner::TestRunner};
@@ -21,7 +21,7 @@ fn calculate_root_from_leaves(c: &mut Criterion) {
 
     for size in [1_000, 5_000, 10_000, 100_000] {
         // Too slow.
-        #[allow(unexpected_cfgs)]
+        #[expect(unexpected_cfgs)]
         if cfg!(codspeed) && size > 5_000 {
             continue;
         }
@@ -63,7 +63,7 @@ fn calculate_root_from_leaves_repeated(c: &mut Criterion) {
 
     for init_size in [1_000, 10_000, 100_000] {
         // Too slow.
-        #[allow(unexpected_cfgs)]
+        #[expect(unexpected_cfgs)]
         if cfg!(codspeed) && init_size > 10_000 {
             continue;
         }
@@ -72,7 +72,7 @@ fn calculate_root_from_leaves_repeated(c: &mut Criterion) {
 
         for update_size in [100, 1_000, 5_000, 10_000] {
             // Too slow.
-            #[allow(unexpected_cfgs)]
+            #[expect(unexpected_cfgs)]
             if cfg!(codspeed) && update_size > 1_000 {
                 continue;
             }
@@ -84,7 +84,9 @@ fn calculate_root_from_leaves_repeated(c: &mut Criterion) {
                 // hash builder
                 let benchmark_id = BenchmarkId::new(
                     "hash builder",
-                    format!("init size {init_size} | update size {update_size} | num updates {num_updates}"),
+                    format!(
+                        "init size {init_size} | update size {update_size} | num updates {num_updates}"
+                    ),
                 );
                 group.bench_function(benchmark_id, |b| {
                     b.iter_with_setup(
@@ -129,7 +131,7 @@ fn calculate_root_from_leaves_repeated(c: &mut Criterion) {
                                         )
                                     };
 
-                                let walker = TrieWalker::new(
+                                let walker = TrieWalker::storage_trie(
                                     InMemoryStorageTrieCursor::new(
                                         B256::ZERO,
                                         NoopStorageTrieCursor::default(),
@@ -137,7 +139,7 @@ fn calculate_root_from_leaves_repeated(c: &mut Criterion) {
                                     ),
                                     prefix_set,
                                 );
-                                let mut node_iter = TrieNodeIter::new(
+                                let mut node_iter = TrieNodeIter::storage_trie(
                                     walker,
                                     HashedPostStateStorageCursor::new(
                                         NoopHashedStorageCursor::default(),
@@ -177,7 +179,9 @@ fn calculate_root_from_leaves_repeated(c: &mut Criterion) {
                 // sparse trie
                 let benchmark_id = BenchmarkId::new(
                     "sparse trie",
-                    format!("init size {init_size} | update size {update_size} | num updates {num_updates}"),
+                    format!(
+                        "init size {init_size} | update size {update_size} | num updates {num_updates}"
+                    ),
                 );
                 group.bench_function(benchmark_id, |b| {
                     b.iter_with_setup(
@@ -215,7 +219,7 @@ fn calculate_root_from_leaves_repeated(c: &mut Criterion) {
     }
 }
 
-fn generate_test_data(size: usize) -> B256HashMap<U256> {
+fn generate_test_data(size: usize) -> B256Map<U256> {
     let mut runner = TestRunner::deterministic();
     proptest::collection::hash_map(any::<B256>(), any::<U256>(), size)
         .new_tree(&mut runner)

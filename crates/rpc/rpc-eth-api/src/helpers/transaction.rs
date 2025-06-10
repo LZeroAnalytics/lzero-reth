@@ -6,7 +6,10 @@ use crate::{
     helpers::estimate::EstimateCall, FromEthApiError, FullEthApiTypes, IntoEthApiError,
     RpcNodeCore, RpcNodeCoreExt, RpcReceipt, RpcTransaction,
 };
-use alloy_consensus::{transaction::TransactionMeta, BlockHeader, Transaction};
+use alloy_consensus::{
+    transaction::{SignerRecoverable, TransactionMeta},
+    BlockHeader, Transaction,
+};
 use alloy_dyn_abi::TypedData;
 use alloy_eips::{eip2718::Encodable2718, BlockId};
 use alloy_network::TransactionBuilder;
@@ -14,14 +17,13 @@ use alloy_primitives::{Address, Bytes, TxHash, B256};
 use alloy_rpc_types_eth::{transaction::TransactionRequest, BlockNumberOrTag, TransactionInfo};
 use futures::Future;
 use reth_node_api::BlockBody;
-use reth_primitives::{transaction::SignedTransactionIntoRecoveredExt, SealedBlockWithSenders};
-use reth_primitives_traits::SignedTransaction;
-use reth_provider::{
+use reth_primitives_traits::{RecoveredBlock, SignedTransaction};
+use reth_rpc_eth_types::{utils::binary_search, EthApiError, SignError, TransactionSource};
+use reth_rpc_types_compat::transaction::TransactionCompat;
+use reth_storage_api::{
     BlockNumReader, BlockReaderIdExt, ProviderBlock, ProviderReceipt, ProviderTx, ReceiptProvider,
     TransactionsProvider,
 };
-use reth_rpc_eth_types::{utils::binary_search, EthApiError, SignError, TransactionSource};
-use reth_rpc_types_compat::transaction::{from_recovered, from_recovered_with_block_context};
 use reth_transaction_pool::{PoolTransaction, TransactionOrigin, TransactionPool};
 use std::sync::Arc;
 
@@ -38,8 +40,7 @@ use std::sync::Arc;
 /// There are subtle differences between when transacting [`TransactionRequest`]:
 ///
 /// The endpoints `eth_call` and `eth_estimateGas` and `eth_createAccessList` should always
-/// __disable__ the base fee check in the
-/// [`EnvWithHandlerCfg`](revm_primitives::CfgEnvWithHandlerCfg).
+/// __disable__ the base fee check in the [`CfgEnv`](revm::context::CfgEnv).
 ///
 /// The behaviour for tracing endpoints is not consistent across clients.
 /// Geth also disables the basefee check for tracing: <https://github.com/ethereum/go-ethereum/blob/bc0b87ca196f92e5af49bd33cc190ef0ec32b197/eth/tracers/api.go#L955-L955>
@@ -51,7 +52,7 @@ use std::sync::Arc;
 pub trait EthTransactions: LoadTransaction<Provider: BlockReaderIdExt> {
     /// Returns a handle for signing data.
     ///
-    /// Singer access in default (L1) trait method implementations.
+    /// Signer access in default (L1) trait method implementations.
     #[expect(clippy::type_complexity)]
     fn signers(&self) -> &parking_lot::RwLock<Vec<Box<dyn EthSigner<ProviderTx<Self::Provider>>>>>;
 
@@ -89,7 +90,7 @@ pub trait EthTransactions: LoadTransaction<Provider: BlockReaderIdExt> {
     {
         async move {
             self.cache()
-                .get_sealed_block_with_senders(block)
+                .get_recovered_block(block)
                 .await
                 .map(|b| b.map(|b| b.body().transactions().to_vec()))
                 .map_err(Self::Error::from_eth_err)
@@ -208,7 +209,7 @@ pub trait EthTransactions: LoadTransaction<Provider: BlockReaderIdExt> {
         Self: LoadBlock,
     {
         async move {
-            if let Some(block) = self.block_with_senders(block_id).await? {
+            if let Some(block) = self.recovered_block(block_id).await? {
                 let block_hash = block.hash();
                 let block_number = block.number();
                 let base_fee_per_gas = block.base_fee_per_gas();
@@ -217,15 +218,13 @@ pub trait EthTransactions: LoadTransaction<Provider: BlockReaderIdExt> {
                         hash: Some(*tx.tx_hash()),
                         block_hash: Some(block_hash),
                         block_number: Some(block_number),
-                        base_fee: base_fee_per_gas.map(u128::from),
+                        base_fee: base_fee_per_gas,
                         index: Some(index as u64),
                     };
 
-                    return Ok(Some(from_recovered_with_block_context(
-                        tx.clone().with_signer(*signer),
-                        tx_info,
-                        self.tx_resp_builder(),
-                    )?))
+                    return Ok(Some(
+                        self.tx_resp_builder().fill(tx.clone().with_signer(*signer), tx_info)?,
+                    ))
                 }
             }
 
@@ -250,12 +249,12 @@ pub trait EthTransactions: LoadTransaction<Provider: BlockReaderIdExt> {
                     RpcNodeCore::pool(self).get_transaction_by_sender_and_nonce(sender, nonce)
                 {
                     let transaction = tx.transaction.clone_into_consensus();
-                    return Ok(Some(from_recovered(transaction, self.tx_resp_builder())?));
+                    return Ok(Some(self.tx_resp_builder().fill_pending(transaction)?));
                 }
             }
 
             // Check if the sender is a contract
-            if self.get_code(sender, None).await?.len() > 0 {
+            if !self.get_code(sender, None).await?.is_empty() {
                 return Ok(None);
             }
 
@@ -282,7 +281,7 @@ pub trait EthTransactions: LoadTransaction<Provider: BlockReaderIdExt> {
             .await?;
 
             let block_id = num.into();
-            self.block_with_senders(block_id)
+            self.recovered_block(block_id)
                 .await?
                 .and_then(|block| {
                     let block_hash = block.hash();
@@ -298,14 +297,10 @@ pub trait EthTransactions: LoadTransaction<Provider: BlockReaderIdExt> {
                                 hash: Some(*tx.tx_hash()),
                                 block_hash: Some(block_hash),
                                 block_number: Some(block_number),
-                                base_fee: base_fee_per_gas.map(u128::from),
+                                base_fee: base_fee_per_gas,
                                 index: Some(index as u64),
                             };
-                            from_recovered_with_block_context(
-                                tx.clone().with_signer(*signer),
-                                tx_info,
-                                self.tx_resp_builder(),
-                            )
+                            self.tx_resp_builder().fill(tx.clone().with_signer(*signer), tx_info)
                         })
                 })
                 .ok_or(EthApiError::HeaderNotFound(block_id))?
@@ -325,8 +320,8 @@ pub trait EthTransactions: LoadTransaction<Provider: BlockReaderIdExt> {
         Self: LoadBlock,
     {
         async move {
-            if let Some(block) = self.block_with_senders(block_id).await? {
-                if let Some(tx) = block.transactions().get(index) {
+            if let Some(block) = self.recovered_block(block_id).await? {
+                if let Some(tx) = block.body().transactions().get(index) {
                     return Ok(Some(tx.encoded_2718().into()))
                 }
             }
@@ -491,8 +486,8 @@ pub trait LoadTransaction: SpawnBlocking + FullEthApiTypes + RpcNodeCoreExt {
                             // part of pending block) and already. We don't need to
                             // check for pre EIP-2 because this transaction could be pre-EIP-2.
                             let transaction = tx
-                                .into_ecrecovered_unchecked()
-                                .ok_or(EthApiError::InvalidTransactionSignature)?;
+                                .try_into_recovered_unchecked()
+                                .map_err(|_| EthApiError::InvalidTransactionSignature)?;
 
                             let tx = TransactionSource::Block {
                                 transaction,
@@ -552,7 +547,7 @@ pub trait LoadTransaction: SpawnBlocking + FullEthApiTypes + RpcNodeCoreExt {
         Output = Result<
             Option<(
                 TransactionSource<ProviderTx<Self::Provider>>,
-                Arc<SealedBlockWithSenders<ProviderBlock<Self::Provider>>>,
+                Arc<RecoveredBlock<ProviderBlock<Self::Provider>>>,
             )>,
             Self::Error,
         >,
@@ -570,7 +565,7 @@ pub trait LoadTransaction: SpawnBlocking + FullEthApiTypes + RpcNodeCoreExt {
             };
             let block = self
                 .cache()
-                .get_sealed_block_with_senders(block_hash)
+                .get_recovered_block(block_hash)
                 .await
                 .map_err(Self::Error::from_eth_err)?;
             Ok(block.map(|block| (transaction, block)))

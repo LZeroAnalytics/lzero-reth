@@ -6,27 +6,27 @@ use crate::{
     to_range, BlockHashReader, BlockNumReader, HeaderProvider, ReceiptProvider,
     TransactionsProvider,
 };
-use alloy_consensus::transaction::TransactionMeta;
+use alloy_consensus::transaction::{SignerRecoverable, TransactionMeta};
 use alloy_eips::{eip2718::Encodable2718, BlockHashOrNumber};
 use alloy_primitives::{Address, BlockHash, BlockNumber, TxHash, TxNumber, B256, U256};
 use reth_chainspec::ChainInfo;
-use reth_db::{
-    static_file::{
-        BlockHashMask, HeaderMask, HeaderWithHashMask, ReceiptMask, StaticFileCursor,
-        TDWithHashMask, TotalDifficultyMask, TransactionMask,
-    },
+use reth_db::static_file::{
+    BlockHashMask, BodyIndicesMask, HeaderMask, HeaderWithHashMask, ReceiptMask, StaticFileCursor,
+    TDWithHashMask, TotalDifficultyMask, TransactionMask,
+};
+use reth_db_api::{
+    models::StoredBlockBodyIndices,
     table::{Decompress, Value},
 };
 use reth_node_types::NodePrimitives;
-use reth_primitives::{transaction::recover_signers, SealedHeader};
-use reth_primitives_traits::SignedTransaction;
+use reth_primitives_traits::{SealedHeader, SignedTransaction};
+use reth_storage_api::BlockBodyIndicesProvider;
 use reth_storage_errors::provider::{ProviderError, ProviderResult};
 use std::{
     fmt::Debug,
-    ops::{Deref, RangeBounds},
+    ops::{Deref, RangeBounds, RangeInclusive},
     sync::Arc,
 };
-
 /// Provider over a specific `NippyJar` and range.
 #[derive(Debug)]
 pub struct StaticFileJarProvider<'a, N> {
@@ -297,14 +297,14 @@ impl<N: NodePrimitives<SignedTx: Decompress + SignedTransaction>> TransactionsPr
         range: impl RangeBounds<TxNumber>,
     ) -> ProviderResult<Vec<Address>> {
         let txs = self.transactions_by_tx_range(range)?;
-        recover_signers(&txs, txs.len()).ok_or(ProviderError::SenderRecoveryError)
+        Ok(reth_primitives_traits::transaction::recover::recover_signers(&txs)?)
     }
 
     fn transaction_sender(&self, num: TxNumber) -> ProviderResult<Option<Address>> {
         Ok(self
             .cursor()?
             .get_one::<TransactionMask<Self::Transaction>>(num.into())?
-            .and_then(|tx| tx.recover_signer()))
+            .and_then(|tx| tx.recover_signer().ok()))
     }
 }
 
@@ -349,5 +349,35 @@ impl<N: NodePrimitives<SignedTx: Decompress + SignedTransaction, Receipt: Decomp
             }
         }
         Ok(receipts)
+    }
+
+    fn receipts_by_block_range(
+        &self,
+        _block_range: RangeInclusive<BlockNumber>,
+    ) -> ProviderResult<Vec<Vec<Self::Receipt>>> {
+        // Related to indexing tables. StaticFile should get the tx_range and call static file
+        // provider with `receipt()` instead for each
+        Err(ProviderError::UnsupportedProvider)
+    }
+}
+
+impl<N: NodePrimitives> BlockBodyIndicesProvider for StaticFileJarProvider<'_, N> {
+    fn block_body_indices(&self, num: u64) -> ProviderResult<Option<StoredBlockBodyIndices>> {
+        self.cursor()?.get_one::<BodyIndicesMask>(num.into())
+    }
+
+    fn block_body_indices_range(
+        &self,
+        range: RangeInclusive<BlockNumber>,
+    ) -> ProviderResult<Vec<StoredBlockBodyIndices>> {
+        let mut cursor = self.cursor()?;
+        let mut indices = Vec::with_capacity((range.end() - range.start() + 1) as usize);
+
+        for num in range {
+            if let Some(block) = cursor.get_one::<BodyIndicesMask>(num.into())? {
+                indices.push(block)
+            }
+        }
+        Ok(indices)
     }
 }

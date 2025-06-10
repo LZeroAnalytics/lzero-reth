@@ -4,7 +4,8 @@ use std::env;
 use alloy_primitives::{Address, Bytes, U256};
 use once_cell::sync::Lazy;
 use serde::Deserialize;
-use crate::primitives::{hex, Bytecode};
+use revm::primitives::hex;
+use revm::bytecode::Bytecode;
 
 #[derive(Clone)]
 pub struct OverrideAccount {

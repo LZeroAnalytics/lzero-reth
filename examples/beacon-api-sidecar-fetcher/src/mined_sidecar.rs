@@ -1,16 +1,16 @@
 use crate::BeaconSidecarConfig;
-use alloy_consensus::{
-    transaction::PooledTransaction, Signed, Transaction as _, TxEip4844WithSidecar,
-};
+use alloy_consensus::{BlockHeader, Signed, Transaction as _, TxEip4844WithSidecar, Typed2718};
+use alloy_eips::eip7594::BlobTransactionSidecarVariant;
 use alloy_primitives::B256;
 use alloy_rpc_types_beacon::sidecar::{BeaconBlobBundle, SidecarIterator};
 use eyre::Result;
 use futures_util::{stream::FuturesUnordered, Future, Stream, StreamExt};
 use reqwest::{Error, StatusCode};
-use reth::{
-    primitives::SealedBlockWithSenders,
-    providers::CanonStateNotification,
-    transaction_pool::{BlobStoreError, TransactionPoolExt},
+use reth_ethereum::{
+    pool::{BlobStoreError, TransactionPoolExt},
+    primitives::RecoveredBlock,
+    provider::CanonStateNotification,
+    PooledTransactionVariant,
 };
 use serde::{Deserialize, Serialize};
 use std::{
@@ -30,7 +30,7 @@ pub struct BlockMetadata {
 
 #[derive(Debug, Clone)]
 pub struct MinedBlob {
-    pub transaction: Signed<TxEip4844WithSidecar>,
+    pub transaction: Signed<TxEip4844WithSidecar<BlobTransactionSidecarVariant>>,
     pub block_metadata: BlockMetadata,
 }
 
@@ -41,6 +41,7 @@ pub struct ReorgedBlob {
 }
 
 #[derive(Debug, Clone)]
+#[expect(clippy::large_enum_variant)]
 pub enum BlobTransactionEvent {
     Mined(MinedBlob),
     Reorged(ReorgedBlob),
@@ -97,10 +98,10 @@ where
     St: Stream<Item = CanonStateNotification> + Send + Unpin + 'static,
     P: TransactionPoolExt + Unpin + 'static,
 {
-    fn process_block(&mut self, block: &SealedBlockWithSenders) {
+    fn process_block(&mut self, block: &RecoveredBlock<reth_ethereum::Block>) {
         let txs: Vec<_> = block
+            .body()
             .transactions()
-            .iter()
             .filter(|tx| tx.is_eip4844())
             .map(|tx| (tx.clone(), tx.blob_versioned_hashes().unwrap().len()))
             .collect();
@@ -112,11 +113,11 @@ where
             return
         }
 
-        match self.pool.get_all_blobs_exact(txs.iter().map(|(tx, _)| tx.hash()).collect()) {
+        match self.pool.get_all_blobs_exact(txs.iter().map(|(tx, _)| *tx.tx_hash()).collect()) {
             Ok(blobs) => {
                 actions_to_queue.reserve_exact(txs.len());
                 for ((tx, _), sidecar) in txs.iter().zip(blobs.into_iter()) {
-                    if let PooledTransaction::Eip4844(transaction) = tx
+                    if let PooledTransactionVariant::Eip4844(transaction) = tx
                         .clone()
                         .try_into_pooled_eip4844(Arc::unwrap_or_clone(sidecar))
                         .expect("should not fail to convert blob tx if it is already eip4844")
@@ -195,17 +196,15 @@ where
                             // handle reorged blocks
                             for (_, block) in old.blocks().iter() {
                                 let txs: Vec<BlobTransactionEvent> = block
+                                    .body()
                                     .transactions()
-                                    .iter()
-                                    .filter(|tx: &&reth::primitives::TransactionSigned| {
-                                        tx.is_eip4844()
-                                    })
+                                    .filter(|tx| tx.is_eip4844())
                                     .map(|tx| {
-                                        let transaction_hash = tx.hash();
+                                        let transaction_hash = *tx.tx_hash();
                                         let block_metadata = BlockMetadata {
-                                            block_hash: new.tip().block.hash(),
-                                            block_number: new.tip().block.number,
-                                            gas_used: new.tip().block.gas_used,
+                                            block_hash: new.tip().hash(),
+                                            block_number: new.tip().number(),
+                                            gas_used: new.tip().gas_used(),
                                         };
                                         BlobTransactionEvent::Reorged(ReorgedBlob {
                                             transaction_hash,
@@ -231,8 +230,8 @@ where
 async fn fetch_blobs_for_block(
     client: reqwest::Client,
     url: String,
-    block: SealedBlockWithSenders,
-    txs: Vec<(reth::primitives::TransactionSigned, usize)>,
+    block: RecoveredBlock<reth_ethereum::Block>,
+    txs: Vec<(reth_ethereum::TransactionSigned, usize)>,
 ) -> Result<Vec<BlobTransactionEvent>, SideCarError> {
     let response = match client.get(url).header("Accept", "application/json").send().await {
         Ok(response) => response,
@@ -273,9 +272,9 @@ async fn fetch_blobs_for_block(
         .iter()
         .filter_map(|(tx, blob_len)| {
             sidecar_iterator.next_sidecar(*blob_len).and_then(|sidecar| {
-                if let PooledTransaction::Eip4844(transaction) = tx
+                if let PooledTransactionVariant::Eip4844(transaction) = tx
                     .clone()
-                    .try_into_pooled_eip4844(sidecar)
+                    .try_into_pooled_eip4844(BlobTransactionSidecarVariant::Eip4844(sidecar))
                     .expect("should not fail to convert blob tx if it is already eip4844")
                 {
                     let block_metadata = BlockMetadata {

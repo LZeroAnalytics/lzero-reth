@@ -4,17 +4,17 @@ use super::setup;
 use alloy_primitives::BlockNumber;
 use eyre::Result;
 use reth_config::config::EtlConfig;
-use reth_db::{tables, DatabaseEnv};
-use reth_db_api::{database::Database, table::TableImporter};
+use reth_consensus::{ConsensusError, FullConsensus};
+use reth_db::DatabaseEnv;
+use reth_db_api::{database::Database, table::TableImporter, tables};
 use reth_db_common::DbTool;
-use reth_evm::noop::NoopBlockExecutorProvider;
+use reth_evm::ConfigureEvm;
 use reth_exex::ExExManagerHandle;
 use reth_node_core::dirs::{ChainPath, DataDirPath};
 use reth_provider::{
     providers::{ProviderNodeTypes, StaticFileProvider},
     DatabaseProviderFactory, ProviderFactory,
 };
-use reth_prune::PruneModes;
 use reth_stages::{
     stages::{
         AccountHashingStage, ExecutionStage, MerkleStage, StorageHashingStage,
@@ -30,6 +30,8 @@ pub(crate) async fn dump_merkle_stage<N>(
     to: BlockNumber,
     output_datadir: ChainPath<DataDirPath>,
     should_run: bool,
+    evm_config: impl ConfigureEvm<Primitives = N::Primitives>,
+    consensus: impl FullConsensus<N::Primitives, Error = ConsensusError> + 'static,
 ) -> Result<()>
 where
     N: ProviderNodeTypes<DB = Arc<DatabaseEnv>>,
@@ -52,7 +54,7 @@ where
         )
     })??;
 
-    unwind_and_copy(db_tool, (from, to), tip_block_number, &output_db)?;
+    unwind_and_copy(db_tool, (from, to), tip_block_number, &output_db, evm_config, consensus)?;
 
     if should_run {
         dry_run(
@@ -75,6 +77,8 @@ fn unwind_and_copy<N: ProviderNodeTypes>(
     range: (u64, u64),
     tip_block_number: u64,
     output_db: &DatabaseEnv,
+    evm_config: impl ConfigureEvm<Primitives = N::Primitives>,
+    consensus: impl FullConsensus<N::Primitives, Error = ConsensusError> + 'static,
 ) -> eyre::Result<()> {
     let (from, to) = range;
     let provider = db_tool.provider_factory.database_provider_rw()?;
@@ -96,7 +100,8 @@ fn unwind_and_copy<N: ProviderNodeTypes>(
 
     // Bring Plainstate to TO (hashing stage execution requires it)
     let mut exec_stage = ExecutionStage::new(
-        NoopBlockExecutorProvider::<N::Primitives>::default(), // Not necessary for unwinding.
+        evm_config, // Not necessary for unwinding.
+        Arc::new(consensus),
         ExecutionStageThresholds {
             max_blocks: Some(u64::MAX),
             max_changes: None,
@@ -104,7 +109,6 @@ fn unwind_and_copy<N: ProviderNodeTypes>(
             max_duration: None,
         },
         MERKLE_STAGE_DEFAULT_CLEAN_THRESHOLD,
-        PruneModes::all(),
         ExExManagerHandle::empty(),
     );
 

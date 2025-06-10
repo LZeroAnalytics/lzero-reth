@@ -1,3 +1,5 @@
+# syntax=docker.io/docker/dockerfile:1.7-labs
+
 FROM lukemathwalker/cargo-chef:latest-rust-1 AS chef
 WORKDIR /app
 
@@ -8,7 +10,7 @@ LABEL org.opencontainers.image.licenses="MIT OR Apache-2.0"
 RUN apt-get update && apt-get -y upgrade && apt-get install -y libclang-dev pkg-config
 
 FROM chef AS planner
-COPY . .
+COPY --exclude=.git --exclude=dist . .
 RUN cargo chef prepare --recipe-path recipe.json
 
 FROM chef AS builder
@@ -30,7 +32,7 @@ ENV FEATURES=$FEATURES
 RUN cargo chef cook --profile $BUILD_PROFILE --features "$FEATURES" --recipe-path recipe.json
 
 # Build the package for lzero-custom-reth
-COPY . .
+COPY --exclude=.git --exclude=dist . .
 RUN cargo build --profile $BUILD_PROFILE -p lzero-custom-reth
 
 # Copy the built binary to a temporary location

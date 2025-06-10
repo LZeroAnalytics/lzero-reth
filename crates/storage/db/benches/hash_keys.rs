@@ -5,7 +5,6 @@ use std::{collections::HashSet, path::Path, sync::Arc};
 use criterion::{
     criterion_group, criterion_main, measurement::WallTime, BenchmarkGroup, Criterion,
 };
-use pprof::criterion::{Output, PProfProfiler};
 use proptest::{
     arbitrary::Arbitrary,
     prelude::any_with,
@@ -27,7 +26,7 @@ use utils::*;
 
 criterion_group! {
     name = benches;
-    config = Criterion::default().with_profiler(PProfProfiler::new(100, Output::Flamegraph(None)));
+    config = Criterion::default();
     targets = hash_keys
 }
 criterion_main!(benches);
@@ -48,7 +47,7 @@ pub fn hash_keys(c: &mut Criterion) {
 
     for size in [10_000, 100_000, 1_000_000] {
         // Too slow.
-        #[allow(unexpected_cfgs)]
+        #[expect(unexpected_cfgs)]
         if cfg!(codspeed) && size > 10_000 {
             continue;
         }
@@ -184,7 +183,7 @@ where
         let mut crsr = tx.cursor_write::<T>().expect("cursor");
         black_box({
             for (k, v) in input {
-                crsr.append(k, v).expect("submit");
+                crsr.append(k, &v).expect("submit");
             }
 
             tx.inner.commit().unwrap()
@@ -202,7 +201,7 @@ where
         let mut crsr = tx.cursor_write::<T>().expect("cursor");
         black_box({
             for (k, v) in input {
-                crsr.insert(k, v).expect("submit");
+                crsr.insert(k, &v).expect("submit");
             }
 
             tx.inner.commit().unwrap()
@@ -229,7 +228,7 @@ where
 }
 
 #[derive(Debug)]
-#[allow(dead_code)]
+#[expect(dead_code)]
 struct TableStats {
     page_size: usize,
     leaf_pages: usize,

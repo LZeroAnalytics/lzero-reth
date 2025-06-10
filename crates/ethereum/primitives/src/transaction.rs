@@ -1,7 +1,11 @@
+//! This file contains the legacy reth `TransactionSigned` type that has been replaced with
+//! alloy's TxEnvelope To test for consistency this is kept
+
 use alloc::vec::Vec;
 use alloy_consensus::{
-    transaction::RlpEcdsaTx, SignableTransaction, Signed, TxEip1559, TxEip2930, TxEip4844,
-    TxEip7702, TxLegacy, TxType, Typed2718,
+    transaction::{RlpEcdsaDecodableTx, RlpEcdsaEncodableTx, SignerRecoverable},
+    EthereumTxEnvelope, SignableTransaction, Signed, TxEip1559, TxEip2930, TxEip4844, TxEip7702,
+    TxLegacy, TxType, Typed2718,
 };
 use alloy_eips::{
     eip2718::{Decodable2718, Eip2718Error, Eip2718Result, Encodable2718},
@@ -9,20 +13,16 @@ use alloy_eips::{
     eip7702::SignedAuthorization,
 };
 use alloy_primitives::{
-    keccak256, Address, Bytes, ChainId, PrimitiveSignature as Signature, TxHash, TxKind, B256, U256,
+    bytes::BufMut, keccak256, Address, Bytes, ChainId, Signature, TxHash, TxKind, B256, U256,
 };
 use alloy_rlp::{Decodable, Encodable};
 use core::hash::{Hash, Hasher};
-use once_cell as _;
-#[cfg(not(feature = "std"))]
-use once_cell::sync::OnceCell as OnceLock;
 use reth_primitives_traits::{
     crypto::secp256k1::{recover_signer, recover_signer_unchecked},
+    sync::OnceLock,
+    transaction::signed::RecoveryError,
     InMemorySize, SignedTransaction,
 };
-use serde::{Deserialize, Serialize};
-#[cfg(feature = "std")]
-use std::sync::OnceLock;
 
 macro_rules! delegate {
     ($self:expr => $tx:ident.$method:ident($($arg:expr),*)) => {
@@ -39,7 +39,8 @@ macro_rules! delegate {
 /// A raw transaction.
 ///
 /// Transaction types were introduced in [EIP-2718](https://eips.ethereum.org/EIPS/eip-2718).
-#[derive(Debug, Clone, PartialEq, Eq, Hash, derive_more::From, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, derive_more::From)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[cfg_attr(any(test, feature = "arbitrary"), derive(arbitrary::Arbitrary))]
 #[cfg_attr(any(test, feature = "reth-codec"), reth_codecs::add_arbitrary_tests(compact))]
 pub enum Transaction {
@@ -84,9 +85,9 @@ pub enum Transaction {
     Eip4844(TxEip4844),
     /// EOA Set Code Transactions ([EIP-7702](https://eips.ethereum.org/EIPS/eip-7702)), type `0x4`.
     ///
-    /// EOA Set Code Transactions give the ability to temporarily set contract code for an
-    /// EOA for a single transaction. This allows for temporarily adding smart contract
-    /// functionality to the EOA.
+    /// EOA Set Code Transactions give the ability to set contract code for an EOA in perpetuity
+    /// until re-assigned by the same EOA. This allows for adding smart contract functionality to
+    /// the EOA.
     Eip7702(TxEip7702),
 }
 
@@ -99,6 +100,17 @@ impl Transaction {
             Self::Eip1559(_) => TxType::Eip1559,
             Self::Eip4844(_) => TxType::Eip4844,
             Self::Eip7702(_) => TxType::Eip7702,
+        }
+    }
+
+    #[cfg(test)]
+    const fn input_mut(&mut self) -> &mut Bytes {
+        match self {
+            Self::Legacy(tx) => &mut tx.input,
+            Self::Eip2930(tx) => &mut tx.input,
+            Self::Eip1559(tx) => &mut tx.input,
+            Self::Eip4844(tx) => &mut tx.input,
+            Self::Eip7702(tx) => &mut tx.input,
         }
     }
 }
@@ -154,14 +166,6 @@ impl alloy_consensus::Transaction for Transaction {
         delegate!(self => tx.kind())
     }
 
-    fn access_list(&self) -> Option<&alloy_eips::eip2930::AccessList> {
-        delegate!(self => tx.access_list())
-    }
-
-    fn authorization_list(&self) -> Option<&[alloy_eips::eip7702::SignedAuthorization]> {
-        delegate!(self => tx.authorization_list())
-    }
-
     fn is_create(&self) -> bool {
         delegate!(self => tx.is_create())
     }
@@ -174,8 +178,16 @@ impl alloy_consensus::Transaction for Transaction {
         delegate!(self => tx.input())
     }
 
+    fn access_list(&self) -> Option<&alloy_eips::eip2930::AccessList> {
+        delegate!(self => tx.access_list())
+    }
+
     fn blob_versioned_hashes(&self) -> Option<&[B256]> {
         delegate!(self => tx.blob_versioned_hashes())
+    }
+
+    fn authorization_list(&self) -> Option<&[alloy_eips::eip7702::SignedAuthorization]> {
+        delegate!(self => tx.authorization_list())
     }
 }
 
@@ -253,20 +265,57 @@ impl reth_codecs::Compact for Transaction {
     }
 }
 
+impl RlpEcdsaEncodableTx for Transaction {
+    fn rlp_encoded_fields_length(&self) -> usize {
+        delegate!(self => tx.rlp_encoded_fields_length())
+    }
+
+    fn rlp_encode_fields(&self, out: &mut dyn BufMut) {
+        delegate!(self => tx.rlp_encode_fields(out))
+    }
+
+    fn eip2718_encode_with_type(&self, signature: &Signature, _ty: u8, out: &mut dyn BufMut) {
+        delegate!(self => tx.eip2718_encode_with_type(signature, tx.ty(), out))
+    }
+
+    fn eip2718_encode(&self, signature: &Signature, out: &mut dyn BufMut) {
+        delegate!(self => tx.eip2718_encode(signature, out))
+    }
+
+    fn network_encode_with_type(&self, signature: &Signature, _ty: u8, out: &mut dyn BufMut) {
+        delegate!(self => tx.network_encode_with_type(signature, tx.ty(), out))
+    }
+
+    fn network_encode(&self, signature: &Signature, out: &mut dyn BufMut) {
+        delegate!(self => tx.network_encode(signature, out))
+    }
+
+    fn tx_hash_with_type(&self, signature: &Signature, _ty: u8) -> TxHash {
+        delegate!(self => tx.tx_hash_with_type(signature, tx.ty()))
+    }
+
+    fn tx_hash(&self, signature: &Signature) -> TxHash {
+        delegate!(self => tx.tx_hash(signature))
+    }
+}
+
 /// Signed Ethereum transaction.
-#[derive(Debug, Clone, Eq, Serialize, Deserialize, derive_more::AsRef, derive_more::Deref)]
+#[derive(Debug, Clone, Eq, derive_more::AsRef, derive_more::Deref)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[cfg_attr(any(test, feature = "reth-codec"), reth_codecs::add_arbitrary_tests(rlp))]
-#[serde(rename_all = "camelCase")]
+#[cfg_attr(feature = "test-utils", derive(derive_more::DerefMut))]
+#[cfg_attr(feature = "serde", serde(rename_all = "camelCase"))]
 pub struct TransactionSigned {
     /// Transaction hash
-    #[serde(skip)]
-    pub hash: OnceLock<TxHash>,
+    #[cfg_attr(feature = "serde", serde(skip))]
+    hash: OnceLock<TxHash>,
     /// The transaction signature values
-    pub signature: Signature,
+    signature: Signature,
     /// Raw transaction info
     #[deref]
     #[as_ref]
-    pub transaction: Transaction,
+    #[cfg_attr(feature = "test-utils", deref_mut)]
+    transaction: Transaction,
 }
 
 impl TransactionSigned {
@@ -287,6 +336,25 @@ impl PartialEq for TransactionSigned {
         self.signature == other.signature &&
             self.transaction == other.transaction &&
             self.tx_hash() == other.tx_hash()
+    }
+}
+
+impl TransactionSigned {
+    /// Creates a new signed transaction from the given transaction, signature and hash.
+    pub fn new(transaction: Transaction, signature: Signature, hash: B256) -> Self {
+        Self { hash: hash.into(), signature, transaction }
+    }
+
+    /// Returns the transaction hash.
+    #[inline]
+    pub fn hash(&self) -> &B256 {
+        self.hash.get_or_init(|| self.recalculate_hash())
+    }
+
+    /// Splits the transaction into parts.
+    pub fn into_parts(self) -> (Transaction, Signature, B256) {
+        let hash = *self.hash.get_or_init(|| self.recalculate_hash());
+        (self.transaction, self.signature, hash)
     }
 }
 
@@ -366,14 +434,34 @@ impl alloy_consensus::Transaction for TransactionSigned {
     }
 }
 
+impl From<Signed<Transaction>> for TransactionSigned {
+    fn from(value: Signed<Transaction>) -> Self {
+        let (tx, sig, hash) = value.into_parts();
+        Self::new(tx, sig, hash)
+    }
+}
+
+impl From<TransactionSigned> for EthereumTxEnvelope<TxEip4844> {
+    fn from(value: TransactionSigned) -> Self {
+        let (tx, signature, hash) = value.into_parts();
+        match tx {
+            Transaction::Legacy(tx) => Signed::new_unchecked(tx, signature, hash).into(),
+            Transaction::Eip2930(tx) => Signed::new_unchecked(tx, signature, hash).into(),
+            Transaction::Eip1559(tx) => Signed::new_unchecked(tx, signature, hash).into(),
+            Transaction::Eip4844(tx) => Signed::new_unchecked(tx, signature, hash).into(),
+            Transaction::Eip7702(tx) => Signed::new_unchecked(tx, signature, hash).into(),
+        }
+    }
+}
+
 #[cfg(any(test, feature = "arbitrary"))]
 impl<'a> arbitrary::Arbitrary<'a> for TransactionSigned {
     fn arbitrary(u: &mut arbitrary::Unstructured<'a>) -> arbitrary::Result<Self> {
-        #[allow(unused_mut)]
+        #[expect(unused_mut)]
         let mut transaction = Transaction::arbitrary(u)?;
 
         let secp = secp256k1::Secp256k1::new();
-        let key_pair = secp256k1::Keypair::new(&secp, &mut rand::thread_rng());
+        let key_pair = secp256k1::Keypair::new(&secp, &mut rand_08::thread_rng());
         let signature = reth_primitives_traits::crypto::secp256k1::sign_message(
             B256::from_slice(&key_pair.secret_bytes()[..]),
             transaction.signature_hash(),
@@ -455,12 +543,12 @@ impl Decodable2718 for TransactionSigned {
 }
 
 impl Encodable for TransactionSigned {
-    fn length(&self) -> usize {
-        self.network_len()
-    }
-
     fn encode(&self, out: &mut dyn alloy_rlp::BufMut) {
         self.network_encode(out);
+    }
+
+    fn length(&self) -> usize {
+        self.network_len()
     }
 }
 
@@ -552,21 +640,27 @@ impl reth_codecs::Compact for TransactionSigned {
     }
 }
 
+impl SignerRecoverable for TransactionSigned {
+    fn recover_signer(&self) -> Result<Address, RecoveryError> {
+        let signature_hash = self.signature_hash();
+        recover_signer(&self.signature, signature_hash)
+    }
+
+    fn recover_signer_unchecked(&self) -> Result<Address, RecoveryError> {
+        let signature_hash = self.signature_hash();
+        recover_signer_unchecked(&self.signature, signature_hash)
+    }
+}
+
 impl SignedTransaction for TransactionSigned {
     fn tx_hash(&self) -> &TxHash {
         self.hash.get_or_init(|| self.recalculate_hash())
     }
 
-    fn signature(&self) -> &Signature {
-        &self.signature
-    }
-
-    fn recover_signer(&self) -> Option<Address> {
-        let signature_hash = self.signature_hash();
-        recover_signer(&self.signature, signature_hash)
-    }
-
-    fn recover_signer_unchecked_with_buf(&self, buf: &mut Vec<u8>) -> Option<Address> {
+    fn recover_signer_unchecked_with_buf(
+        &self,
+        buf: &mut Vec<u8>,
+    ) -> Result<Address, RecoveryError> {
         self.encode_for_signing(buf);
         let signature_hash = keccak256(buf);
         recover_signer_unchecked(&self.signature, signature_hash)
@@ -576,28 +670,64 @@ impl SignedTransaction for TransactionSigned {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use alloy_eips::eip7702::constants::SECP256K1N_HALF;
-    use alloy_primitives::hex;
+    use alloy_consensus::EthereumTxEnvelope;
+    use proptest::proptest;
+    use proptest_arbitrary_interop::arb;
+    use reth_codecs::Compact;
 
-    #[test]
-    fn eip_2_reject_high_s_value() {
-        // This pre-homestead transaction has a high `s` value and should be rejected by the
-        // `recover_signer` method:
-        // https://etherscan.io/getRawTx?tx=0x9e6e19637bb625a8ff3d052b7c2fe57dc78c55a15d258d77c43d5a9c160b0384
-        //
-        // Block number: 46170
-        let raw_tx = hex!("f86d8085746a52880082520894c93f2250589a6563f5359051c1ea25746549f0d889208686e75e903bc000801ba034b6fdc33ea520e8123cf5ac4a9ff476f639cab68980cd9366ccae7aef437ea0a0e517caa5f50e27ca0d1e9a92c503b4ccb039680c6d9d0c71203ed611ea4feb33");
-        let tx = TransactionSigned::decode_2718(&mut &raw_tx[..]).unwrap();
-        let signature = tx.signature();
+    proptest! {
+        #[test]
+        fn test_roundtrip_compact_encode_envelope(reth_tx in arb::<TransactionSigned>()) {
+            let mut expected_buf = Vec::<u8>::new();
+            let expected_len = reth_tx.to_compact(&mut expected_buf);
 
-        // make sure we know it's greater than SECP256K1N_HALF
-        assert!(signature.s() > SECP256K1N_HALF);
+            let mut actual_but  = Vec::<u8>::new();
+            let alloy_tx = EthereumTxEnvelope::<TxEip4844>::from(reth_tx);
+            let actual_len = alloy_tx.to_compact(&mut actual_but);
 
-        // recover signer, expect failure
-        let hash = *tx.tx_hash();
-        assert!(recover_signer(signature, hash).is_none());
+            assert_eq!(actual_but, expected_buf);
+            assert_eq!(actual_len, expected_len);
+        }
 
-        // use unchecked, ensure it succeeds (the signature is valid if not for EIP-2)
-        assert!(recover_signer_unchecked(signature, hash).is_some());
+        #[test]
+        fn test_roundtrip_compact_decode_envelope(reth_tx in arb::<TransactionSigned>()) {
+            let mut buf = Vec::<u8>::new();
+            let len = reth_tx.to_compact(&mut buf);
+
+            let (actual_tx, _) = EthereumTxEnvelope::<TxEip4844>::from_compact(&buf, len);
+            let expected_tx = EthereumTxEnvelope::<TxEip4844>::from(reth_tx);
+
+            assert_eq!(actual_tx, expected_tx);
+        }
+
+        #[test]
+        fn test_roundtrip_compact_encode_envelope_zstd(mut reth_tx in arb::<TransactionSigned>()) {
+               // zstd only kicks in if the input is large enough
+            *reth_tx.transaction.input_mut() = vec![0;33].into();
+
+            let mut expected_buf = Vec::<u8>::new();
+            let expected_len = reth_tx.to_compact(&mut expected_buf);
+
+            let mut actual_but  = Vec::<u8>::new();
+            let alloy_tx = EthereumTxEnvelope::<TxEip4844>::from(reth_tx);
+            let actual_len = alloy_tx.to_compact(&mut actual_but);
+
+            assert_eq!(actual_but, expected_buf);
+            assert_eq!(actual_len, expected_len);
+        }
+
+        #[test]
+        fn test_roundtrip_compact_decode_envelope_zstd(mut reth_tx in arb::<TransactionSigned>()) {
+            // zstd only kicks in if the input is large enough
+            *reth_tx.transaction.input_mut() = vec![0;33].into();
+
+            let mut buf = Vec::<u8>::new();
+            let len = reth_tx.to_compact(&mut buf);
+
+            let (actual_tx, _) = EthereumTxEnvelope::<TxEip4844>::from_compact(&buf, len);
+            let expected_tx = EthereumTxEnvelope::<TxEip4844>::from(reth_tx);
+
+            assert_eq!(actual_tx, expected_tx);
+        }
     }
 }
