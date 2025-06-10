@@ -1,3 +1,4 @@
+
 use alloy_primitives::{Address, Bytes, U256};
 use core::str::FromStr;
 use once_cell::sync::Lazy;
@@ -7,6 +8,7 @@ use serde::Deserialize;
 use std::collections::{HashMap, HashSet};
 use std::env;
 
+/// Account override configuration for special addresses.
 #[derive(Clone, Debug)]
 pub struct OverrideAccount {
     /// The account balance.

@@ -272,10 +272,7 @@ impl<DB> StateProviderDatabase<DB> {
                                     continue;
                                 }
                                 // Non-retriable error or max retries reached
-                                return Err(format!(
-                                    "RPC error {}: {}",
-                                    error.code, error.message
-                                ));
+                                return Err(format!("RPC error {}: {}", error.code, error.message));
                             }
 
                             // Check if the result is present
