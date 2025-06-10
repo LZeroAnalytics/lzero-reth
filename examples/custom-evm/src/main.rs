@@ -116,7 +116,7 @@ async fn main() -> eyre::Result<()> {
     let _guard = RethTracer::new().init()?;
 
     // create a custom chain spec
-    let spec = ChainSpec::builder()
+    let _spec = ChainSpec::builder()
         .chain(Chain::mainnet())
         .genesis(Genesis::default())
         .london_activated()

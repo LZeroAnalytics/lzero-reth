@@ -2,7 +2,7 @@ use crate::primitives::alloy_primitives::{BlockNumber, StorageKey, StorageValue}
 use crate::special_accounts::{is_price_feed, is_special_address, OVERRIDE_ACCOUNTS};
 use alloy_primitives::{Address, Bytes, B256, U256};
 use core::ops::{Deref, DerefMut};
-use core::str::FromStr;
+
 use moka::sync::Cache;
 use once_cell::sync::Lazy;
 use rand::Rng;
@@ -15,7 +15,7 @@ use revm::primitives::hex;
 use revm::{bytecode::Bytecode, state::AccountInfo, Database, DatabaseRef};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
-use std::collections::HashMap;
+
 use std::thread::sleep;
 use std::time::Duration;
 
@@ -351,7 +351,7 @@ impl<DB> StateProviderDatabase<DB> {
     }
 
     /// Determines if an RPC error code is transient and worth retrying
-    fn is_transient_error(code: i64) -> bool {
+    fn is_transient_error(_code: i64) -> bool {
         true
     }
 

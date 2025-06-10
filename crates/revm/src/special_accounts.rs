@@ -7,7 +7,7 @@ use serde::Deserialize;
 use std::collections::{HashMap, HashSet};
 use std::env;
 
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct OverrideAccount {
     /// The account balance.
     pub balance: U256,

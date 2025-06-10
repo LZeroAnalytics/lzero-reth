@@ -7,7 +7,6 @@ use reth_chainspec::ChainSpec;
 use reth_evm_ethereum::EthEvmConfig;
 use reth_node_ethereum::{node::EthereumAddOns, EthereumNode};
 use reth_primitives::EthPrimitives;
-use reth_revm::database::StateProviderDatabase;
 
 fn main() {
     //
