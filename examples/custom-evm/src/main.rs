@@ -24,7 +24,7 @@ use reth_ethereum::{
     node::{
         api::{FullNodeTypes, NodeTypes},
         builder::{components::ExecutorBuilder, BuilderContext, NodeBuilder},
-        core::{args::RpcServerArgs, node_config::NodeConfig},
+        core::node_config::NodeConfig,
         node::EthereumAddOns,
         EthereumNode,
     },
@@ -125,6 +125,10 @@ async fn main() -> eyre::Result<()> {
         .cancun_activated()
         .prague_activated()
         .build();
+
+    // create node config and task manager
+    let node_config = NodeConfig::test();
+    let tasks = TaskManager::current();
 
     let handle = NodeBuilder::new(node_config)
         .testing_node(tasks.executor())
