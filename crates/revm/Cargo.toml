@@ -20,14 +20,14 @@ reth-trie = { workspace = true, optional = true }
 reth-tracing.workspace = true
 
 # misc
-moka = "0.12.9"
+moka = { version = "0.12.9", features = ["sync"] }
 
 # alloy
 alloy-primitives.workspace = true
 
 # revm
 revm.workspace = true
-reqwest = { workspace = true, features = ["blocking"] }
+reqwest = { workspace = true, features = ["blocking", "json"] }
 serde_json.workspace = true
 serde.workspace = true
 once_cell.workspace = true
