@@ -1,6 +1,3 @@
-
-
-
 use alloy_primitives::{Address, Bytes, U256};
 use core::str::FromStr;
 use once_cell::sync::Lazy;
@@ -76,8 +73,6 @@ pub static OVERRIDE_ACCOUNTS: Lazy<HashMap<Address, OverrideAccount>> = Lazy::ne
     accounts
 });
 
-
-
 pub fn is_special_address(addr: &Address) -> bool {
     let sentinel1 = Address::from_str("0xfffffffffffffffffffffffffffffffffffffffe")
         .expect("valid sentinel address 1");
@@ -87,15 +82,11 @@ pub fn is_special_address(addr: &Address) -> bool {
     *addr == sentinel1 || *addr == sentinel2
 }
 
-
 #[derive(Debug, Deserialize)]
 
 pub struct PriceFeed {
-
     pub address: Address,
 }
-
-
 
 pub static PRICE_FEED_ADDRESSES: Lazy<HashSet<Address>> = Lazy::new(|| {
     let json_str = env::var("PRICE_FEEDS").unwrap_or_default();
@@ -107,8 +98,6 @@ pub static PRICE_FEED_ADDRESSES: Lazy<HashSet<Address>> = Lazy::new(|| {
         feeds.into_values().map(|feed| feed.address).collect()
     }
 });
-
-
 
 pub fn is_price_feed(address: &Address) -> bool {
     PRICE_FEED_ADDRESSES.contains(address)
