@@ -18,7 +18,7 @@
 ## What is Bloctopus Reth?
 
 Bloctopus Reth is a fork of the official Reth implementation. It adds forking capabilities so that users can create networks that 
-have full access to mainnet data. It also supports Chainlink data feeds. It's intended to be used with this [ethereum kurtosis package](https://github.com/LZeroAnalytics/ethereum-package).
+have full access to mainnet data. It also supports Chainlink data feeds. It's intended to be used with this [ethereum kurtosis package](https://github.com/0xBloctopus/ethereum-package).
 
 ### How to use it
 1. Build your own docker image which will use the custom example under examples/lzero-custom-reth.
